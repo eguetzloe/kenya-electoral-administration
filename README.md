@@ -1,1 +1,1 @@
-# kenya-electoral-administration
+This repository includes the original code and raw data for replication of Harris et al.'s paper "Electoral Administration in Fledgling Democracies: Experimental Evidence from Kenya." It also includes the code I used to perform Bayesian extensions upon the models used in the original published paper.
