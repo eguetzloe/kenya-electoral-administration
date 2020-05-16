@@ -1,0 +1,890 @@
+---
+title: 'Replication of "Electoral Administration in Fledgling Democracies: Experimental Evidence from Kenya"'
+author: "Erin Guetzloe"
+date: "05/14/2020"
+output:
+  pdf_document:
+    number_sections: false
+  html_document:
+    number_sections: false
+bookdown::pdf_document2: default
+link-citations: yes
+bibliography: bib.bib
+biblio-style: "apalike"
+fontsize: 12pt
+linestretch: 1.5
+toc: false
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# Load packages
+packages <- c('data.table', "foreach", "AER", "foreign", "dplyr", "car", "readr", "nnet", "sandwich", "xtable", "knitr", "zoo", "triebeard", "readxl", "maptools", "broom", "readstata13", "Matching", "stargazer", "ggplot2", "ggthemes", "grid", "quantreg", "gridExtra", "arm", "estimatr", "reshape2", "estimatr", "rstanarm", "huxtable", "bayesplot", "matrixStats")
+#"doMC"
+invisible(lapply(packages, function(x) if (!require(x, character.only=T)){install.packages(x);library(x, character.only = T)}))
+#registerDoMC(8)
+```
+
+```{r options}
+# Necessary for outputting huxtable
+options(huxtable.print = "latex")
+# Set seed
+set.seed(10)
+```
+
+```{r, include=FALSE}
+
+dir.create('data')#creates output file.
+file.copy(from = c('exval.rds', 'fig1.rds', 'datalong.rds', 'datashort.rds'), to = 'data')
+dir.create('output')#creates output file.
+```
+
+```{r Load helper code, include=FALSE}
+
+  # Function to cluster robust the errors
+  source("00_Helper_Cluster.R")
+
+  # Standarize function
+  std.func <- function(x){(x - mean(x, na.rm = T))/sd(x, na.rm = T)}
+
+```
+
+```{r Load data and prepare, include=FALSE}
+
+  ## Load necessary datasets
+  exval <- readRDS("data/exval.rds")
+  fig1 <- readRDS('data/fig1.rds')
+  datalong <- readRDS('data/datalong.Rds')
+  datashort <- readRDS('data/datashort.Rds')
+  datashort <- datashort[-which(datashort$rv13 == 0),]
+```
+
+# Abstract
+
+@paper find that local registration visits by election staff to Kenyan polling sites improve voter registration, while civic education and SMS messages reminding voters to register were less effective at increasing registration. I successfully replicated all of the major findings from @paper. My extension focused on using Bayesian modeling and posterior distributions to reproduce the frequentist models employed in the original paper, which showed that poverty, distance of registration offices from polling stations, and population sparseness were all negatively correlated with higher levels of voter registration. The results of the frequentist and Bayesian models were almost identical, providing corroboration to Harris et al.'s claim that attempts to increase levels of voter registration in Kenya must find ways to better interact with areas that are poorer, that have polling stations distant from registration offices, and that are more isolated.
+
+# Introduction
+
+In this experiment, @paper found that local registration visits to polling stations where citizens were registered by election staff with mobile registration devices was the most effective intervention at increasing levels of voter registration out of three interventions designed. The two other interventions, civic education and SMS reminders to ask friends and family to register, had near-zero effects on voter registration. However, when combined with local registration visits by election staff, both civic education and SMS reminders increased levels of registration. Importantly, the researchers also discovered that poverty, distance of polling stations from registration offices, and population sparseness are all negatively correlated with the probability of registering to vote. 
+
+I was able to successfully replicate all of the results from @paper, who graciously made all their data and replication code accessible within the Journal of Politics dataverse. Both their original work and my replication were completed in R. All of the code I used to complete my extension to the paper is available on my Github.^[https://github.com/eguetzloe/electoral-administration-kenya]
+
+For my extension, I sought to use Bayesian modeling to recreate the regressions @paper used to demonstrate that as poverty, distance of election constituency offices from polling stations, and population sparseness increase, levels of voter registration decrease. To do this, I created a set of logistic regressions similar to those used by @paper, but instead of using the lm function as @paper did, I employed the stan_glm function from the rstanarm package. After making the new models, I compared them with the original results and found the differences to be negligible, confirming the claims made by @paper. I then estimated the mean predicted probabilities of at least one voter registering at a polling station based on varying levels of poverty, distance, and population density. Graphing these results as histograms again corroborated Harris et al.'s argument- all of these variables impact levels of voter registration and must be considered when Kenyan policymakers seek to increase registration.
+
+# Literature Review
+
+While there are many studies which attempt to examine the impact of civic education on various measures of political participation such as voter turnout or political knowledge, this paper is unique among much of the current literature regarding civic education and political participation because it examines the impact of civic education along with two other interventions on voter registration specifically. There are only 2 other major academic papers which explore how civic education affects voter registration. In a paper entitled "The Effects of Civic Education on Political Culture: Evidence from Zambia", @zambia look at the impact of canvassing and school-based curriculum approaches to civic education on voter registration. Within the paper "Promoting Democracy in Fragile States: Field Experimental Evidence from Liberia", @liberia examines how townhall meetings can affect registration. However, neither of these papers uses the same approach to civic education as @paper. Most studies design civic education programs targeting students in primary or secondary school, not adults: by implementing new "curriculum or the introduction of civics exams", as @paper write. In contrast, @paper uses face-to-face canvassing as its form of civic education. Additionally, many papers focus exclusively on civic education without exploring alternate mechanisms for increasing voter registration. @paper offers new solutions, showing that "the largest benefits to voter registration may lie in changing convenience and cost, not providing civic education."
+
+Harris et al.'s research also differs from much of the other relevant literature in the type of data and experiment used. @paper employs administrative data provided directly by the Kenyan government, working in collaboration with the Kenyan electoral commission to design a true experiment. Much of the other research published about civic education relies on self-reported data about political knowledge or participation for measuring outcomes, rather than using actual data about levels of registration. While Mvukiyehe et al.'s paper does utilize an experimental design as well, @zambia instead used an observational study. 
+
+Finally, neither @zambia nor @liberia use blocking subgroups to explore alternative variables impacting voter registration. Harris et al.'s decision to include blocking based on poverty, distance, and population density stands out in comparison to other papers that investigate civic education and voter registration. Thus, both the methods of civic education employed in Harris et al.'s research and the design of the experiment itself place it in a unique place within the current literature.
+
+# Paper Review
+
+The experiment documented in this paper was the result of a collaboration between a team of independent researchers and the Kenyan government’s electoral commission, the Independent Electoral and Boundaries Commission (IEBC). Both the researchers and the Kenyan government were interested in testing the best mechanisms for increasing levels of voter registration specifically within younger democracies. The researchers developed three interventions which theoretically could increase voter registration: localization, which involved electoral commission staff being sent out with mobile registration equipment to register citizens to vote, canvassing, which used face-to-face meetings of around ten to thirty minutes each to describe the benefits of registration to citizens, and SMS reminders, which sent text messages to citizens already registered to vote asking them to tell their friends and family about the opportunities to register. They selected seven Kenyan counties for this experiment, which were chosen based on their similarity in levels of poverty, distance from registration offices, population sparseness, and levels of governmental support in the previous election cycle. The selected Kenyan counties contained 3,828 polling stations and out of these stations, 1,674 stations were randomly selected to participate in the experiment. Each polling station was randomly assigned to receive one of six possible treatments: localization only, localization with canvassing, localization with SMS reminders, canvassing alone, SMS reminders alone, or no intervention (these polling stations receiving no intervention served as the control group). 
+
+The researchers also realized that other variables might contribute to levels of voter registration at these polling sites, so each polling station received a standardized score indicating levels of poverty, distance of registration offices from polling stations, and population density around the polling station. Poverty was measured as the percentage of the population who could register at a polling station who were below the poverty line, average across the county. Distance from polling stations to registration offices was measured as an indicator which took into account kilometer distance as the bird flies, kilometer walking distance according to Google Maps, and kilometer driving distance according to Google Maps. Population density was defined as the population density within a 500 meter radius of a polling station. Data for poverty and population density was drawn from worldpop.org. Using this data in combination with information from the IEBC about which polling stations had at least one individual register there from the continuous voter registration (CVR) period between March 16 to November 14, 2016, the researchers found that as levels of poverty, distances between polling stations and registration offices, and levels of population sparseness increase, levels of voter registration decrease. This evidence reveals something important to understand for future researchers and policymakers seeking to increase voter registration in Kenya- the current system must find ways to better engage voters from more impoverished, remote, and sparse areas.
+
+# Replication
+
+After running all of the models from Harris et al.'s replication document, I found my results to be consistent with those presented in the original paper. All of the code required to replicated these results is available within my Appendix. The authors' code can be found at the \textit{The Journal of Politics} Dataverse,^[https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/UT25HQ] and all of the code I use for this extension is available within my Github repository.^[https://github.com/eguetzloe/electoral-administration-kenya]
+
+# Extension
+
+While the models run in Harris et al.'s paper are extensive, I decided that I would build on the work of these researchers by applying a Bayesian framework to three of the models created within the original paper. I was especially interested in the authors' findings that poverty, distance of registration offices from polling stations, and population density all impact levels of voter registration. Harris et al. chose to utilize frequentist modeling to investigate this correlation in their original paper. Thus, to explore this relationship further, I created Bayesian models using the stan_glm function from the rstanarm package. The results of each original regression, explaining voter registration levels by poverty, distance, and sparseness, are compared with the new Bayesian models I created in the table below.
+
+```{r Regressions}
+
+# Create stan_glm regressions, setting refresh=FALSE 
+cvr.pov1 <- stan_glm(cvr ~ pov.s, data = fig1, family = binomial(link = 'probit'), refresh=FALSE)
+cvr.dist1 <- stan_glm(cvr ~ dist.s, data = fig1, family = binomial(link = 'probit'), refresh=FALSE)
+cvr.pd1 <- stan_glm(cvr ~ pd.s, data = fig1, family = binomial(link = 'probit'), refresh=FALSE)
+# Compare with original lm models
+cvr.pov <- glm(cvr ~ pov.s, data = fig1, family = binomial(link = 'probit'))
+cvr.dist <- glm(cvr ~ dist.s, data = fig1, family = binomial(link = 'probit'))
+cvr.pd <- glm(cvr ~ pd.s, data = fig1, family = binomial(link = 'probit'))
+
+```
+
+```{r Regression Table}
+
+# Create table of models using huxtable
+table_reg <- huxreg("Model 1" = cvr.pov,
+                  "New Model 1" = cvr.pov1,
+                  "Model 2" = cvr.dist,
+                  "New Model 2" = cvr.dist1,
+                  "Model 3" = cvr.pd,
+                  "New Model 3" = cvr.pd1,
+                  # stars are null since these measures are less necessary for interpreting Bayesian models
+                  stars = NULL,
+                  coefs = c('Intercept' = '(Intercept)',
+                            'Poverty' = 'pov.s',
+                            'Distance' = 'dist.s',
+                            'Sparseness' = 'pd.s'),
+                            statistics = c('Observations' = 'nobs'))
+  caption(table_reg) <- "Linear and Bayesian Model Comparison"
+  # Set width of table manually to fit on page                          
+  width(table_reg) <- 1
+  # Print table
+  table_reg
+
+```
+
+This table compares the differences in coefficients found from running the frequentist models in the original paper against the Bayesian models created with stan_glm. Though there are a few differences between the coefficients produced by new models and the original, they are largely insignificant, confirming Harris et al.'s claim that as poverty, distance of registration offices from polling stations, and population sparseness increase, levels of voter registration decrease. In interpreting the results presented by this table, it is important to remember that the measures of variation listed under each coefficient in the table are not the same. While the frequentist linear models created in @paper signify the estimated standard errors for each regression coefficient, the Bayesian models that I designed calculate the standard deviation of the median absolute deviation (MAD SD), which takes the median absolute deviation and uses a set scaling factor to make the values interpretable as estimates of standard error. As illustrated within the table, the differences between these values are ultimately negligible, but calculating MAD SD is considered a more "robust measure of dispertion" according to @madsd.
+
+After making the new Bayesian models, I wanted to use these models to create predicted probabilities of voter registration at polling stations with varying levels of poverty, distance from registration offices, and population density. For each of these explanatory variables within the original dataset, I pulled the lowest value, the 25th percentile value, the median value, the 75th percentile value, and the highest value. The highest values represent the highest levels of poverty, distance of registration offices from polling stations, and population sparseness. Next, I placed each of these individual polling stations within "new datasets" which I used to extract posterior draws of the linear predictor transformed into a probabilistic 0-1 scale through the inverse-link function. To do this, I utilized the posterior_linpred function, again from the rstanarm package. I placed the results of these draws into histograms which can help to visualize the mean predicted probabilities of at least one individual registering to vote at polling stations with differing levels of poverty, distance, and sparseness.
+
+```{r Quantiles, eval=FALSE}
+# Not evaluated in the final pdf, but this code shows how percentile values within the fig1 dataset were calculated.
+pov <- fig1$pov.s
+
+quantile(pov, c(0.0, 0.25, 0.5, 0.75, 1.0))
+
+pd <- fig1$pd.s
+
+quantile(pd, c(0.0, 0.25, 0.5, 0.75, 1.0))
+
+dist <- fig1$dist.s
+
+quantile(dist, c(0.0, 0.25, 0.5, 0.75, 1.0))
+
+```
+
+
+```{r Posterior Distributions Poverty, warning=FALSE, message=FALSE}
+# Creation of new data for posterior draws, with "1" representing the lowest
+# value in the fig1 dataset for that variable, "2" representing the 25th
+# percentile of the fig1 dataset, "3" the median, "4" the 75th percentile, and
+# "5" the highest value.
+new_data.pov1 <- tibble(pov.s = -2.40798896)
+new_data.pov2 <- tibble(pov.s = -0.67244615)
+new_data.pov3 <- tibble(pov.s = 0.02240885)
+new_data.pov4 <- tibble(pov.s = 0.57654020)
+new_data.pov5 <- tibble(pov.s = 4.58637027)
+
+# Predicted probabilities created with posterior_linpred, taking posterior draws of the linear predictor. transform=TRUE is set to put resulting values on a 0-1 probability scale.
+
+postlin.pov1 <- posterior_linpred(cvr.pov1, newdata = new_data.pov1, type = "response", transform = TRUE)
+hist.pov1 <- postlin.pov1 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Lowest Poverty Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pov2 <- posterior_linpred(cvr.pov1, newdata = new_data.pov2, type = "response", transform = TRUE)
+hist.pov2 <- postlin.pov2 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "25th Percentile Poverty Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pov3 <- posterior_linpred(cvr.pov1, newdata = new_data.pov3, type = "response", transform = TRUE)
+hist.pov3 <- postlin.pov3 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Median Poverty Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pov4 <- posterior_linpred(cvr.pov1, newdata = new_data.pov4, type = "response", transform = TRUE)
+hist.pov4 <- postlin.pov4 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "75th Percentile Poverty Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pov5 <- posterior_linpred(cvr.pov1, newdata = new_data.pov5, type = "response", transform = TRUE)
+hist.pov5 <- postlin.pov5 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Highest Poverty Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+# Arranging the histograms
+grid.arrange(hist.pov1, hist.pov2, hist.pov3, hist.pov4, hist.pov5,
+             ncol = 2,
+             nrow = 3,
+             top = "Figure 1: Predicted Probabilities of Registration Based On Poverty")
+
+```
+
+Figure 1, printed above, provides visualizations of polling stations at the lowest poverty level (thus, the wealthiest polling station), the 25th percentile poverty level, the median poverty level, the 75th percentile poverty level, and the highest poverty level (the poorest polling station). As expected from the results of the models created earlier, the histograms show a general trend of predicted probability of registration decreasing as poverty scores increase. The red dashed lines indicate the mean predicted probability of at least one individual registering to vote at a certain polling station. For example, the mean predicted probability of at least a single citizen registering at the wealthiest polling station is approximately 0.79, while the mean predicted probability of at least one voter registering at the poorest polling station is about 0.40. This is roughly a 50% decrease in mean predicted probability, indicating that poverty does indeed have a strong impact on voter registration in Kenya.
+
+```{r Posterior Distributions Distance, warning=FALSE, message=FALSE}
+# Creation of new data for posterior draws, with "1" representing the lowest
+# value in the fig1 dataset for that variable, "2" representing the 25th
+# percentile of the fig1 dataset, "3" the median, "4" the 75th percentile, and
+# "5" the highest value.
+new_data.dist1 <- tibble(dist.s = -1.2330498)
+new_data.dist2 <- tibble(dist.s = -0.6705810)
+new_data.dist3 <- tibble(dist.s = -0.2357648)
+new_data.dist4 <- tibble(dist.s = 0.3594136)
+new_data.dist5 <- tibble(dist.s = 9.6321005)
+
+# Predicted probabilities created with posterior_linpred, taking posterior draws of the linear predictor. transform=TRUE is set to put resulting values on a 0-1 probability scale.
+postlin.dist1 <- posterior_linpred(cvr.dist1, newdata = new_data.dist1, type = "response", transform = TRUE)
+# Creating histograms of probabilities to show the mean estimated probabilities of 5 polling stations having a cvr=TRUE.
+hist.dist1 <- postlin.dist1 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Lowest Distance Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.dist2 <- posterior_linpred(cvr.dist1, newdata = new_data.dist2, type = "response", transform = TRUE)
+hist.dist2 <- postlin.dist2 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "25th Percentile Distance Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.dist3 <- posterior_linpred(cvr.dist1, newdata = new_data.dist3, type = "response", transform = TRUE)
+hist.dist3 <- postlin.dist3 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Median Distance Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.dist4 <- posterior_linpred(cvr.dist1, newdata = new_data.dist4, type = "response", transform = TRUE)
+hist.dist4 <- postlin.dist4 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "75th Percentile Distance Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.dist5 <- posterior_linpred(cvr.dist1, newdata = new_data.dist5, type = "response", transform = TRUE)
+hist.dist5 <- postlin.dist5 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Highest Distance Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+# Arranging the histograms
+grid.arrange(hist.dist1, hist.dist2, hist.dist3, hist.dist4, hist.dist5,
+             ncol = 2,
+             nrow = 3,
+             top = "Figure 2: Predicted Probabilities of Registration Based On Distance")
+
+```
+
+The next variable I visualized in Figure 2 was distance of registration offices from polling stations. In Kenya, voters must first go to a constituency election office to register to vote, while actual voting occurs at polling stations. Thus, @paper was interested in discovering whether longer distances between the election offices where voters register and the polling stations where voting happens have an impact on levels of registration. Both the results from the authors' original models and my new Bayesian models confirm that longer distances between registration offices and polling stations are negatively correlated with registration. The mean predicted probability of a voter registering for the polling station with the least distance from its registration office is estimated to be about 0.78, while the mean predicted probability of a single voter registering for the polling station farthest from its registration office is only 0.02. While this predicted probability may seem very low, it seems that this value may be somewhat of an outlier within the dataset since the polling station with the 75th percentile distance score has a mean predicted probability estimated at 0.64. Additionally, the distribution of draws for the highest distance score is heavily skewed to the right, meaning that probabilities as high as 0.10 were estimated within the matrix of simulations. However, even considering the potential outlier value, these histograms confirm that as the distance between election constituency offices and polling stations increase, the predicted probability of at least one voter registering at that polling station decreases.
+
+```{r Posterior Distributions Density, warning=FALSE, message=FALSE}
+# Creation of new data for posterior draws, with "1" representing the lowest
+# value in the fig1 dataset for that variable, "2" representing the 25th
+# percentile of the fig1 dataset, "3" the median, "4" the 75th percentile, and
+# "5" the highest value.
+new_data.pd1 <- tibble(pd.s = -19.13693276)
+new_data.pd2 <- tibble(pd.s = 0.03220952)
+new_data.pd3 <- tibble(pd.s = 0.14382842)
+new_data.pd4 <- tibble(pd.s = 0.24899459)
+new_data.pd5 <- tibble(pd.s = 0.34344371)
+
+# Predicted probabilities created with posterior_linpred, taking posterior draws of the linear predictor. transform=TRUE is set to put resulting values on a 0-1 probability scale.
+postlin.pd1 <- posterior_linpred(cvr.pd1, newdata = new_data.pd1, type = "response", transform = TRUE)
+# Creating histograms of probabilities to show the mean estimated probabilities of 5 polling stations having a cvr=TRUE.
+hist.pd1 <- postlin.pd1 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Lowest Sparseness Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pd2 <- posterior_linpred(cvr.pd1, newdata = new_data.pd2, type = "response", transform = TRUE)
+hist.pd2 <- postlin.pd2 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "25th Percentile Sparseness Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pd3 <- posterior_linpred(cvr.pd1, newdata = new_data.pd3, type = "response", transform = TRUE)
+hist.pd3 <- postlin.pd3 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Median Sparseness Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pd4 <- posterior_linpred(cvr.pd1, newdata = new_data.pd4, type = "response", transform = TRUE)
+hist.pd4 <- postlin.pd4 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "75th Percentile Sparseness Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+postlin.pd5 <- posterior_linpred(cvr.pd1, newdata = new_data.pd5, type = "response", transform = TRUE)
+hist.pd5 <- postlin.pd5 %>%
+  as_tibble() %>%
+  ggplot(aes(x = `1`)) + 
+  geom_histogram(color="blue", fill="lightblue", alpha=0.5) +
+  labs(x = "Predicted Probability of Registration", y = "Posterior Draws", subtitle = "Highest Sparseness Score") +
+  geom_vline(aes(xintercept=mean(`1`)),
+            color="red", linetype="dashed", size=1) +
+  theme_bw()
+
+# Arranging the histograms
+grid.arrange(hist.pd1, hist.pd2, hist.pd3, hist.pd4, hist.pd5,
+             ncol = 2,
+             nrow = 3,
+             top = "Predicted Probabilities of Registration Based On Population Sparseness")
+
+```
+
+The final variable I explored was population density. As with the highest distance score in the previous set of histograms, it appears that the polling station with the lowest population sparseness (thus, the polling station with the most concentrated population) may be an outlier value. Out of 4000 posterior draws, the predicted probabilities for registration at this polling station only extend from approximately 0.99 to 1.00. The mean predicted probability of registration for the polling station with the 25th percentile density score is close to 0.68, while the mean predicted probability of a voter registering at the most isolated polling station is about 0.64. Interestingly, the values produced here indicate that there is not a great difference in predicted probability of registration between a polling station in a more densely populated region and a polling station in the least densely populated region. Though the negative correlation between population sparseness and voter registration indicated in the models is still present, it appears from a closer look at the data that the coefficient for density, which was the largest of all the coefficients shown in Table 1, was being affected one or more outlier polling stations with very high levels of population density. This could mean that population sparseness is not as strongly influential on voter registration as it initially appears.
+
+# Conclusion
+
+In "Electoral Administration in Fledgling Democracies: Experimental Evidence from Kenya," @paper explores potential mechanisms for increasing levels of voter registration within younger democratic states. The researchers worked with the Kenyan electoral commission to specifically explore three different interventions designed to increase voter registration: first, localization, where electoral staff with mobile registration devices visit polling stations to reduce the time needed to register, second, canvassing, where electoral staff paid visits to citizens' homes to discuss with them the importance of registering to vote, and third, SMS reminders, where individuals registered to vote receive text messages asking them to remind their friends and family to register as well. @paper found that localization was the most effective means of increasing registration. They also discovered that poverty, distance of registration offices from polling stations, and population sparseness are all correlated with lower levels of voter registration.
+
+I was successful in my attempt to replicate all of Harris et al.'s results. I used the data made publicly available through @dataverse. All of the authors' original code and the code I used for this extension was completed in R, and it can be found at my Github repository for this project.^[https://github.com/eguetzloe/electoral-administration-kenya]
+
+My extension used Bayesian rather than frequentist modeling to investigate the relationship that poverty, distance from registration offices, and population sparseness have on voter registration. The results produced from the Bayesian models were almost identical to the results of Harris et al.'s frequentist models. Additionally, I used a set of histograms to visualize the mean predicted probabilities of at least one individual registering at polling stations with the lowest, 25th percentile, median, 75th percentile, and highest levels of each explanatory variable. These graphs illustrate the same trend central to Harris et al.'s original paper: poverty, distance, and isolation are correlated with lower levels of voter registration, and thus any efforts to increase voter registration must actively seek to better respond to the needs of polling stations in impoverished regions, regions where polling stations are far from registration offices, and regions with isolated populations.
+
+This finding has important implications for any actors attempting to increase voter registration in any nation. While many interventions intended to increase registration focus solely on providing citizens with civic education, it is possible that the focus of such interventions should not be primarily on increasing political knowledge but instead should be on eliminating barriers that discourage people from registering, such as cost, distance, and long waiting periods. This provides a compelling explanation for why localization was the most effective intervention used in this experiment: because localization actively reduced cost, time, and distance by allowing individuals to register on-site at polling stations. Researchers interested in building on this body of work ought to consider designing other interventions that could decrease poverty, distance, and sparseness-related barriers to voting. Doing so could be the key to increasing voter registration in young democracies and could provide a model for how to promote greater political participation across the world. 
+
+\newpage
+
+# References
+
+<div id="refs"></div>
+
+\newpage
+
+# Appendix 
+
+I successfully replicated all the results of @paper. The replication code for the original paper is provided directly by the authors in \textit{The Journal of Politics} Dataverse,^[https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/UT25HQ] and can also be found in my Github repository for this replication project.^[https://github.com/eguetzloe/electoral-administration-kenya] Here is an example of one of the figures I replicated from @paper, which became the basis of my extension in this paper.
+
+```{r Harris et al. Figure 1}
+
+# Run regressions
+cvr.pov <- glm(cvr ~ pov.s, data = fig1, family = binomial(link = 'probit'))
+cvr.dist <- glm(cvr ~ dist.s, data = fig1, family = binomial(link = 'probit'))
+cvr.pd <- glm(cvr ~ pd.s, data = fig1, family = binomial(link = 'probit'))
+
+# Predicated values
+pov.pred <- predict(cvr.pov, se.fit = T)
+pov.s <- data.frame(pred = invlogit(pov.pred$fit), min = invlogit(pov.pred$fit - 1.96*pov.pred$se.fit), max = invlogit(pov.pred$fit + 1.96*pov.pred$se.fit), x = fig1$pov.s, var = "Poverty")
+
+pd.pred <- predict(cvr.pd, se.fit = T)
+pd.s <- data.frame(pred = invlogit(pd.pred$fit), min = invlogit(pd.pred$fit - 1.96*pd.pred$se.fit), max = invlogit(pd.pred$fit + 1.96*pd.pred$se.fit), x = fig1$pd.s, var = "Sparseness")
+
+dist.pred <- predict(cvr.dist, se.fit = T)
+dist.s <- data.frame(pred = invlogit(dist.pred$fit), min = invlogit(dist.pred$fit - 1.96*dist.pred$se.fit), max = invlogit(dist.pred$fit + 1.96*dist.pred$se.fit), x = fig1$dist.s, var = "Distance")
+
+pdata <- rbind(pov.s, pd.s, dist.s)
+pdata$actual <- as.numeric(c(fig1$cvr, fig1$cvr, fig1$cvr))
+pdata$var <- factor(pdata$var, levels = c('Poverty', 'Distance', 'Sparseness'))
+
+# Plot results
+p0 <- ggplot(data = pdata)
+p1 <- geom_line(aes(x = x, y = pred))
+p2 <- geom_ribbon(aes(x = x, ymin = min, ymax = max), alpha = 0.25)
+p3 <- geom_point(aes(y = actual, x = x), alpha = 0.01, size = 0.75)
+
+out <- p0 + p1 + p2 + p3 + 
+  theme_bw() + 
+  facet_wrap(~var, scales = 'free_x', nrow = 1) + 
+  ylab('Prob. of Any Voter Registration') + 
+  xlab('Standardized Predictor') +
+  scale_y_continuous(breaks = c(0, 0.5, 1), labels = c('0', '0.5', '1'), expand = c(0.1, 0)) + theme(axis.title = element_text(size = 12), axis.text.x = element_blank(), axis.ticks.x = element_blank(), strip.text.x = element_text(size = 12))
+
+ggsave(out, filename = "output/fg1.tiff", width = 8, height = 3, dpi = 1200)
+
+out
+
+```
+
+```{r Blocked Regressions, eval=FALSE}
+
+# Run the regressions. This can take time given the fixed effects.
+
+# 1: basic
+reg1 <- lm(reg ~ as.factor(treatment_2d_10d),data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",])
+#summary(reg1)
+rse.reg1 <- lm_cluster_robust2(reg1, data = datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], cluster_name = "PS_ID")[[1]][,2]
+#rse.reg1
+
+# 2: pre-registered
+reg2 <- lm(reg ~  as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day),data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",])
+#summary(reg2)
+rse.reg2 <- lm_cluster_robust2(reg2, data = datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], cluster_name = "PS_ID")[[1]][,2]
+#rse.reg2
+
+# 3: 2 + weights + covars
+reg3 <- lm(reg ~ as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day) + pov + distance + pd ,data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], weights=w)
+#summary(reg3)
+rse.reg3 <- lm_cluster_robust2(reg3, data = datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], cluster_name = "PS_ID")[[1]][,2]
+#rse.reg3
+
+# 4: 3 but dependent variable divided by 2013 registered voters
+dl2 <- datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",]
+dl2 <- dl2[which(!is.na(dl2$reg_byrv13)),]
+reg4 <- lm(reg_byrv13 ~ as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day) + pov + distance + pd ,data = dl2, weights=w)
+#summary(reg4)
+rse.reg4 <- lm_cluster_robust2(reg4, data = dl2, cluster_name = "PS_ID")[[1]][,2]
+#rse.reg4
+
+# 5: 4 but collapsed to polling station level
+datashort$treatment_2d_10d <-datashort$treat #necessary to get output on same rows
+reg5 <- lm(reg_int_byrv13 ~  as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + pov + distance + pd,data =datashort, weights=w)
+se.reg5 <- coef(summary(reg5))[,"Std. Error"]
+#summary(reg5)
+
+```
+
+```{r Dependent Variable Information, warning=FALSE, results='asis', eval=FALSE}
+
+# Dependent variable information for control areas 
+
+# Average number of registrations per PS per day
+c1<-round(mean(datalong$reg[datalong$treatment_2d_10d=="Control" & (datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06")], na.rm=TRUE),4)
+
+# Average number of registrations per PS per day divided by total 2013 registered at that PS
+c4<-round(mean(datalong$reg[datalong$treatment_2d_10d=="Control" & (datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06")]/datalong$rv13[datalong$treatment_2d_10d=="Control" & (datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06")], na.rm=TRUE),4)
+
+# Total number of registration at a PS over the intervention period divided by total 2013 registered at that PS
+c5<-round(mean(datashort$reg_int_byrv13[datashort$treatment_2d_10d=="Control"], na.rm=TRUE),4)
+
+```
+
+
+```{r Table in LaTex, include=FALSE, warning=FALSE, results='asis', eval=FALSE}
+
+# Create the .tex table, which is loaded by the Rmd manuscript
+
+out <- stargazer(reg1, reg2, reg3, reg4, reg5, type = "latex",
+                 title = c('Impact of Interventions on Voter Registration'),
+                 label = 'tab:regshortrun',
+                 font.size = 'footnotesize',
+                 no.space = TRUE,
+                 #column.separate = c(2, 2),
+                column.labels = c('\\# Regs', '\\# Regs', '\\# Regs', '\\# Regs by 2013', '\\# Regs by 2013'), 
+                dep.var.labels.include = FALSE,
+                 dep.var.caption = "",
+                 star.char = NULL,
+                 se = list(rse.reg1, rse.reg2, rse.reg3, rse.reg4, se.reg5),
+                 #dep.var.caption = 'Dependent Variable',
+                 covariate.labels = c('Canvassing effect', 'SMS effect', 'Localization effect', 'Localization+Canvassing effect', 'Localization+SMS effect'),
+                 add.lines = list(c('Control average', c1, c1, c1, c4, c5),
+                                  c('Level of analysis', 'PS day', 'PS day', 'PS day', 'PS day', 'PS'), 
+                 c('Pre-registered', 'No', 'Yes', 'No', 'No', 'No'),
+                 c('Block FE', 'No', 'Yes', 'Yes', 'Yes', 'Yes'), 
+                 c('Polling Station FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                 c('Day FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                 c('Controls', 'No', "No", 'Yes', 'Yes', 'Yes'), 
+                 c('Weights', 'No', "No", 'Yes', 'Yes', 'Yes')), 
+                 omit = c('Constant', '_ID', 'day', 'pov', 'distance', 'pd'),
+                 omit.stat = c('f', 'adj.rsq', 'ser'),
+                 header = F
+)
+
+cat(out, file = 'output/tb2.tex', sep = "\n")
+
+```
+
+```{r Table in stargazer, warning=FALSE, message=FALSE, results='asis', eval=FALSE}
+
+# output using stargazer html
+
+stargazer(reg1, reg2, reg3, reg4, reg5, type = "latex", 
+                title = c('Impact of Interventions on Voter Registration'),
+                font.size = 'footnotesize',
+                no.space = TRUE,
+                column.labels = c('\\# Regs', '\\# Regs', '\\# Regs', '\\# Regs by 2013', '\\# Regs by 2013'), 
+                dep.var.labels.include = FALSE,
+                dep.var.caption = "",
+                star.char = NULL,
+                se = list(rse.reg1, rse.reg2, rse.reg3, rse.reg4, se.reg5),
+                covariate.labels = c('Canvassing effect', 'SMS effect', 'Localization effect', 'Localization+Canvassing effect', 'Localization+SMS effect'),
+                add.lines = list(c('Control average', c1, c1, c1, c4, c5),
+                c('Level of analysis', 'PS day', 'PS day', 'PS day', 'PS day', 'PS'), 
+                c('Pre-registered', 'No', 'Yes', 'No', 'No', 'No'),
+                c('Block FE', 'No', 'Yes', 'Yes', 'Yes', 'Yes'), 
+                c('Polling Station FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                c('Day FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                c('Controls', 'No', "No", 'Yes', 'Yes', 'Yes'), 
+                c('Weights', 'No', "No", 'Yes', 'Yes', 'Yes')), 
+                omit = c('Constant', '_ID', 'day', 'pov', 'distance', 'pd'),
+                omit.stat = c('f', 'adj.rsq', 'ser'),
+                header = F
+)
+
+```
+
+# Figure 2: Results by Poverty, Distance and Population Density
+
+This figure presents the results by quintiles of the following three subgroups: poverty, distance from registration office, and population density.
+
+```{r Subgroup Results Regressions, warning=FALSE, eval=FALSE}
+
+# Prepare quintiles for each subgroup
+
+ublock <- unique(datashort$BLOCK_ID)
+block.vars <- foreach(ii = 1:length(ublock), .combine = rbind) %dopar% {
+  tmp <- datashort[which(datashort$BLOCK_ID == ublock[ii]),]
+  mdist <- mean(tmp$distance)
+  mpov <- mean(tmp$pov)
+  mdens <- mean(tmp$pd)
+  return(data.frame(BLOCK_ID = ublock[ii], distance = mdist, pov = mpov, dens=mdens))
+}
+
+# 5= poor, 1= rich
+block.q.pov <- quantile(block.vars$pov, seq(0, 1, 0.2))
+block.vars$pov.q <- findInterval(x = block.vars$pov, vec = block.q.pov, all.inside = T, rightmost.closed = T)
+
+# 5= far away, 1= closeby
+block.q.dist <- quantile(block.vars$distance, seq(0, 1, 0.2))
+block.vars$dist.q <- findInterval(x = block.vars$distance, vec = block.q.dist, all.inside = T, rightmost.closed = T)
+
+# 5= low density, 1= high density
+block.q.dens <- quantile(block.vars$dens, seq(0, 1, 0.2))
+block.vars$dens.q <- findInterval(x = block.vars$dens, vec = block.q.dens, all.inside = T, rightmost.closed = T)
+
+# assign quantiles to blocks
+datashort$pov.q <- NA
+datashort$dist.q <- NA
+datashort$dens.q <- NA
+for(ii in 1:5){
+  datashort$pov.q[which(datashort$BLOCK_ID %in% block.vars$BLOCK_ID[block.vars$pov.q == ii])] <- ii
+  datashort$dist.q[which(datashort$BLOCK_ID %in% block.vars$BLOCK_ID[block.vars$dist.q == ii])] <- ii
+  datashort$dens.q[which(datashort$BLOCK_ID %in% block.vars$BLOCK_ID[block.vars$dens.q == ii])] <- ii
+}
+
+## Run regressions
+
+# Poverty
+# 1 is richests and 5 is high poverty.
+pov.quant <- foreach(ii = 1:5) %dopar% {
+  out <- summary(lm(reg_int_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + pov + distance + pd, data = datashort[datashort$pov.q == ii,], weights=w))
+  return(out)
+}
+
+# Distance
+# 1 is nearby and 5 is far away
+dist.quant <- foreach(ii = 1:5) %dopar% {
+  out <- summary(lm(reg_int_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + pov + distance + pd, data = datashort[datashort$dist.q == ii,]), weights=w)
+  return(out)
+}
+
+# Density
+# 1 is dense and 5 is not dense
+dens.quant <- foreach(ii = 1:5) %dopar% {
+  out <- summary(lm(reg_int_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + pov + distance + pd, data = datashort[datashort$dens.q == ii,]), weights=w)
+  return(out)
+}
+
+```
+
+
+```{r Subgroups Figure, eval=FALSE}
+
+# Create figure
+
+## Poverty
+
+df.pov <- foreach(ii = 1:length(pov.quant), .combine = rbind) %dopar% {
+  tmp <- pov.quant[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  tmp$min <- tmp$coef - 1.96*tmp$se
+  tmp$max <- tmp$coef + 1.96*tmp$se
+  tmp$q <- ii
+  tmp$context <- "Pov"
+  tmp$Treatment <- c("C","S","L","L+C","L+S")
+  tmp$Treatment <- factor(tmp$Treatment, levels = c("C","S","L","L+C","L+S"))
+  tmp
+}
+df.pov <- transform(df.pov, q = c("Richest", "Rich", "Median","Poor","Poorest")[as.numeric(q)])
+df.pov$q <- factor(df.pov$q, levels = c("Richest", "Rich", "Median","Poor","Poorest"))
+
+p <- ggplot(data = df.pov) + theme_bw() + 
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Treatment, ymin = min, ymax = max)) +
+  geom_point(aes(x=Treatment, y=coef)) +
+  ylim(-0.025, 0.075) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5), axis.title.x=element_blank(), axis.title.y=element_blank())
+pov <- p + facet_grid(. ~ q)  + theme(strip.text.x = element_text(size=12))
+
+## Distance
+
+df.dist <- foreach(ii = 1:length(dist.quant), .combine = rbind) %dopar% {
+  tmp <- dist.quant[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  tmp$min <- tmp$coef - 1.96*tmp$se
+  tmp$max <- tmp$coef + 1.96*tmp$se
+  tmp$q <- ii
+  tmp$context <- "Dens"
+  tmp$Treatment <- c("C","S","L","L+C","L+S")
+  tmp$Treatment <- factor(tmp$Treatment, levels = c("C","S","L","L+C","L+S"))
+  tmp
+}
+df.dist <- transform(df.dist, q = c("Closest", "Close", "Median","Far","Farthest")[as.numeric(q)])
+df.dist$q <- factor(df.dist$q, levels = c("Closest", "Close", "Median","Far","Farthest"))
+
+p <- ggplot(data = df.dist) + theme_bw() + 
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Treatment, ymin = min, ymax = max)) +
+  geom_point(aes(x=Treatment, y=coef)) +
+  ylim(-0.025, 0.075) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5), axis.title.x=element_blank(), axis.title.y=element_blank())
+dis <- p + facet_grid(. ~ q)  + theme(strip.text.x = element_text(size=12))
+
+## Density
+
+df.dens <- foreach(ii = 1:length(dens.quant), .combine = rbind) %dopar% {
+  tmp <- dens.quant[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  tmp$min <- tmp$coef - 1.96*tmp$se
+  tmp$max <- tmp$coef + 1.96*tmp$se
+  tmp$q <- 6-ii
+  tmp$context <- "Dens"
+  tmp$Treatment <- c("C","S","L","L+C","L+S")
+  tmp$Treatment <- factor(tmp$Treatment, levels = c("C","S","L","L+C","L+S"))
+  tmp
+}
+df.dens <- transform(df.dens, q = c("Densest", "Dense", "Median","Sparse","Sparsest")[as.numeric(q)])
+df.dens$q <- factor(df.dens$q, levels = c("Densest", "Dense", "Median","Sparse","Sparsest"))
+
+p <- ggplot(data = df.dens) + theme_bw() +
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Treatment, ymin = min, ymax = max)) +
+  geom_point(aes(x=Treatment, y=coef)) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5), axis.title.x=element_blank(), axis.title.y=element_blank())
+
+den <- p + facet_grid(. ~ q) + theme(strip.text.x = element_text(size=12))
+
+# Combine the three figures and output
+
+fout <- grid.arrange(pov, dis, den, nrow=3)
+
+  ggsave(fout, filename = 'output/fg2.tiff', dpi = 1200, width = 8, height = 10)
+
+```
+
+## Related numbers used in text
+
+The magnitudes of the effects of localization in richest, poorest, closest, farthest, densest and sparsest quintile of blocks:
+
+```{r Related Numbers, eval=FALSE}
+pov_1 <-as.data.frame(pov.quant[[1]]$coefficients[4,])
+pov_5 <-as.data.frame(pov.quant[[5]]$coefficients[4,])
+dis_1 <-as.data.frame(dist.quant[[1]]$coefficients[4,])
+dis_5 <-as.data.frame(dist.quant[[5]]$coefficients[4,])
+den_5 <-as.data.frame(dens.quant[[1]]$coefficients[4,])
+den_1 <-as.data.frame(dens.quant[[5]]$coefficients[4,])
+
+impact <- cbind(pov_1, pov_5, dis_1, dis_5, den_1, den_5)
+
+colnames(impact) =  c("Richest", "Poorest", "Closest", "Farthest","Densest", "Sparsest")
+kable(impact, digits = 4)
+```
+
+# Figure 3: Downstream Effects of Localization on Voter Registration and Election Outcomes
+
+Next, we estimate the effects of the localization intervention on registered voters, turnout, turnout rate, vote margin and preference diversity, for six different races during the 2017 Kenya Presidential Election.
+
+```{r Effects of Localization by Race, eval=FALSE}
+
+tc.func <- function(x){tryCatch(x, error = function(e){NA})}
+vars <- c('to', "pct.to","frac2","vm", 'rv')
+dats <- c('wrep', 'caw', 'gov', 'sen', 'mp', 'pres')
+combs <- expand.grid(vars, dats, stringsAsFactors = F)
+combs$var.name <- paste(combs[,1], combs[,2], sep = '.')
+
+all.res <- foreach(ii = 1:nrow(combs), .combine = rbind) %dopar% {
+outcome.name <- combs[ii, 'var.name']
+datashort$outcome <- datashort[, outcome.name]
+datashort$outcome.std <- std.func(datashort$outcome)
+
+out.std <- tryCatch(lm_robust(outcome.std ~ as.factor(BLOCK_ID) + pd + distance + pov + local, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID), error = function(e){NA})
+
+out <- data.frame(
+  coef =  tc.func(coef(out.std)['local']),
+  se = tc.func(out.std$std.error['local'])
+)
+out$t <- round(out$coef/out$se, 2)
+out$coef <- round(out$coef, 3)
+out$se <- round(out$se, 3)
+out$var <- combs[ii, 'Var1']
+out$contest <- combs[ii, 'Var2']
+return(out)
+}
+
+pdata <- all.res
+pdata$var[which(pdata$var == 'to')] <- 'Turnout'
+pdata$var[which(pdata$var == 'pct.to')] <- 'Turnout\n Rate'
+pdata$var[which(pdata$var == 'frac2')] <- 'Preference\n Diversity'
+pdata$var[which(pdata$var == 'vm')] <- 'Vote\n Margin'
+pdata$var[which(pdata$var == 'rv')] <- 'Registered\n Voters'
+pdata$contest[which(pdata$contest == 'caw')] <- 'Ward Member'
+pdata$contest[which(pdata$contest == 'gov')] <- 'Governor'
+pdata$contest[which(pdata$contest == 'mp')] <- 'MP'
+pdata$contest[which(pdata$contest == 'pres')] <- 'President'
+pdata$contest[which(pdata$contest == 'sen')] <- 'Senator'
+pdata$contest[which(pdata$contest == 'wrep')] <- 'Women\'s Rep.'
+pdata$contest <- factor(pdata$contest, levels = c('President', 'Governor', 'MP', 'Senator', 'Ward Member', 'Women\'s Rep.'))
+pdata$Outcome <- pdata$var
+pdata$Outcome <- factor(pdata$Outcome, levels = c('Registered\n Voters', 'Turnout','Turnout\n Rate', 'Vote\n Margin', 'Preference\n Diversity'))
+pdata$min <- pdata$coef - 1.96*pdata$se
+pdata$max <- pdata$coef + 1.96*pdata$se
+p <- ggplot(data = pdata) + theme_bw() +
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Outcome, ymin = min, ymax = max)) +
+  geom_point(aes(x=Outcome, y=coef)) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5, size = 10), axis.title=element_text(size = 12), strip.text.x = element_text(size = 12)) + 
+  ylab('Standard Deviations') + xlab('Election Outcomes') +
+  facet_wrap(~ contest)
+
+# Output figure
+
+ggsave(p, filename = 'output/fg3.tiff', width = 8, height = 6, dpi = 1200)
+
+p
+
+```
+
+## Related numbers used in text
+
+This table present the effect sizes in tabular form across races and outcomes, in standardized coefficients.
+
+```{r Effects Sizes Standardized, eval=FALSE}
+
+# In standard deviations
+
+downstream <- all.res
+downstream$var[which(downstream$var == 'to')] <- 'Turnout'
+downstream$var[which(downstream$var == 'pct.to')] <- 'Turnout Rate'
+downstream$var[which(downstream$var == 'frac2')] <- 'Preference Diversity'
+downstream$var[which(downstream$var == 'vm')] <- 'Vote Margin'
+downstream$var[which(downstream$var == 'rv')] <- 'Registered Voters'
+downstream$contest[which(downstream$contest == 'caw')] <- 'Ward Member'
+downstream$contest[which(downstream$contest == 'gov')] <- 'Governor'
+downstream$contest[which(downstream$contest == 'mp')] <- 'MP'
+downstream$contest[which(downstream$contest == 'pres')] <- 'President'
+downstream$contest[which(downstream$contest == 'sen')] <- 'Senator'
+downstream$contest[which(downstream$contest == 'wrep')] <- 'Women\'s Rep.'
+
+downstream <- downstream[, c(5, 4, 1, 2, 3)]
+rownames(downstream) <- c()
+colnames(downstream) =  c("Race", "Outcome", "effect", "se","t-value")
+kable(downstream)
+
+```
+
+We also present the results, not standardized:
+
+```{r Unstandardized Results, eval=FALSE}
+
+all.res.NS <- foreach(ii = 1:nrow(combs), .combine = rbind) %dopar% {
+outcome.name <- combs[ii, 'var.name']
+datashort$outcome <- datashort[, outcome.name]
+
+out.NS <- tryCatch(lm_robust(outcome ~ as.factor(BLOCK_ID) + pd + distance + pov + local, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID), error = function(e){NA})
+
+out <- data.frame(
+  coef =  tc.func(coef(out.NS)['local']),
+  se = tc.func(out.NS$std.error['local'])
+)
+out$t <- round(out$coef/out$se, 2)
+out$coef <- round(out$coef, 3)
+out$se <- round(out$se, 3)
+out$var <- combs[ii, 'Var1']
+out$contest <- combs[ii, 'Var2']
+return(out)
+}
+
+# Create table
+
+downstream <- all.res.NS
+downstream$var[which(downstream$var == 'to')] <- 'Turnout'
+downstream$var[which(downstream$var == 'pct.to')] <- 'Turnout Rate'
+downstream$var[which(downstream$var == 'frac2')] <- 'Preference Diversity'
+downstream$var[which(downstream$var == 'vm')] <- 'Vote Margin'
+downstream$var[which(downstream$var == 'rv')] <- 'Registered Voters'
+downstream$contest[which(downstream$contest == 'caw')] <- 'Ward Member'
+downstream$contest[which(downstream$contest == 'gov')] <- 'Governor'
+downstream$contest[which(downstream$contest == 'mp')] <- 'MP'
+downstream$contest[which(downstream$contest == 'pres')] <- 'President'
+downstream$contest[which(downstream$contest == 'sen')] <- 'Senator'
+downstream$contest[which(downstream$contest == 'wrep')] <- 'Women\'s Rep.'
+
+downstream <- downstream[, c(5, 4, 1, 2, 3)]
+rownames(downstream) <- c()
+colnames(downstream) =  c("Race", "Outcome", "effect", "se","t-value")
+kable(downstream)
+
+
+
+```
+
+We also present the results for 2017 registrations as a percent of 2013 registrations, which are discussed in the text.
+
+```{r Percent of 2013 Results, eval=FALSE}
+datashort$tmp <- std.func(datashort$rv.pres/datashort$rv13)
+lm.out <- lm_robust(tmp ~ local + as.factor(BLOCK_ID) + pd + distance + pov, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID)
+
+out1 <- data.frame(
+  coef =  tc.func(coef(lm.out)['local']),
+  se = tc.func(lm.out$std.error['local'])
+)
+out1$t <- round(out1$coef/out1$se, 2)
+out1$coef <- round(out1$coef, 3)
+out1$se <- round(out1$se, 3)
+out1$var <- '2017 RV as % of 2013 RV, Standardized'
+
+datashort$tmp <- datashort$rv.pres/datashort$rv13
+lm.out <- lm_robust(tmp ~ local + as.factor(BLOCK_ID) + pd + distance + pov, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID)
+
+out2 <- data.frame(
+  coef =  tc.func(coef(lm.out)['local']),
+  se = tc.func(lm.out$std.error['local'])
+)
+out2$t <- round(out2$coef/out2$se, 2)
+out2$coef <- round(out2$coef, 3)
+out2$se <- round(out2$se, 3)
+out2$var <- '2017 RV as % of 2013 RV'
+out <- rbind(out1, out2)
+
+rownames(out) <- c()
+colnames(out) =  c("effect", "se","t-value", "Outcome")
+kable(out) 
+
+```
