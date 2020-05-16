@@ -1,0 +1,986 @@
+---
+title: 'REPLICATION: Electoral Administration in Fledgling Democracies: Experimental Evidence from Kenya'
+author: "Authors: Harris, Kamindo, Van der Windt"
+date: | 
+  | `r format(Sys.time(), '%d %B %Y')` 
+output:
+  html_document:
+    number_sections: true
+    theme: united
+    toc: true
+    toc_depth: 3
+  pdf_document:
+    number_sections: true
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+rm(list=ls(all=TRUE)) 
+gc()
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This .Rmd file replicates all analyses for "Electoral Administration in Fledgling Democracies: Experimental Evidence from Kenya". This .Rmd requires the following datasets, placed in a folder named "data":
+- datalong.Rds: longform polling station-day dataset.
+- datashort.Rds: shortform polling station dataset.
+- exval.rds: data for external validity figure in appendix.
+- fig1.rds: data for figure 1. 
+Place the data and code in their respective folders. If you want (see options below), this Rmd file will output tables and figures in output.
+
+# Replication Setup
+
+```{r,warning=FALSE,message=FALSE}
+
+# Load packages
+packages <- c('data.table', "foreach", "AER", "foreign", "dplyr", "car", "readr", "nnet", "sandwich", "xtable", "knitr", "zoo", "triebeard", "readxl", "maptools", "broom", "readstata13", "Matching", "stargazer", "ggplot2", "grid","quantreg", "gridExtra", "arm", "estimatr", "reshape2", "estimatr")
+#"doMC"
+invisible(lapply(packages, function(x) if (!require(x, character.only=T)){install.packages(x);library(x, character.only = T)}))
+#registerDoMC(8)
+
+# Set working directory:
+
+```
+
+```{r, include=FALSE}
+
+# Set working directory
+opts_knit$set(root.dir = "C:/Users/Peter/Dropbox/Kenya Voter Mobilization/13_writing/01_main/Replication") #CHANGE TO YOUR DESIRED WORKING DIRECTORY.
+
+dir.create('data')#creates output file.
+file.copy(from = c('exval.rds', 'fig1.rds', 'datalong.rds', 'datashort.rds'), to = 'data')
+dir.create('output')#creates output file.
+```
+
+## Load helper code
+
+```{r}
+
+  # Function to cluster robust the errors
+  source("00_Helper_Cluster.R")
+
+  # Standarize function
+  std.func <- function(x){(x - mean(x, na.rm = T))/sd(x, na.rm = T)}
+
+```
+
+## Load data and prepare
+
+```{r}
+
+  ## Load necessary datasets
+
+  exval <- readRDS("data/exval.rds")
+  fig1 <- readRDS('data/fig1.rds')
+  datalong <- readRDS('data/datalong.Rds')
+  datashort <- readRDS('data/datashort.Rds')
+  datashort <- datashort[-which(datashort$rv13 == 0),]
+```
+
+
+# Figure 1: Voter Registration Decreases as Poverty, Distance and Population Sparseness Increase
+
+This figure shows that poverty rates, distance from the election office, and population sparsity are negatively related to the presence of any voter registration activity at polling stations from March 16 to November 14, 2016 - the CVR period before the onset of the experiment.
+
+```{r}
+
+# Run regressions
+cvr.pov <- glm(cvr ~ pov.s, data = fig1, family = binomial(link = 'probit'))
+cvr.dist <- glm(cvr ~ dist.s, data = fig1, family = binomial(link = 'probit'))
+cvr.pd <- glm(cvr ~ pd.s, data = fig1, family = binomial(link = 'probit'))
+
+# Predicated values
+pov.pred <- predict(cvr.pov, se.fit = T)
+pov.s <- data.frame(pred = invlogit(pov.pred$fit), min = invlogit(pov.pred$fit - 1.96*pov.pred$se.fit), max = invlogit(pov.pred$fit + 1.96*pov.pred$se.fit), x = fig1$pov.s, var = "Poverty")
+
+pd.pred <- predict(cvr.pd, se.fit = T)
+pd.s <- data.frame(pred = invlogit(pd.pred$fit), min = invlogit(pd.pred$fit - 1.96*pd.pred$se.fit), max = invlogit(pd.pred$fit + 1.96*pd.pred$se.fit), x = fig1$pd.s, var = "Sparseness")
+
+dist.pred <- predict(cvr.dist, se.fit = T)
+dist.s <- data.frame(pred = invlogit(dist.pred$fit), min = invlogit(dist.pred$fit - 1.96*dist.pred$se.fit), max = invlogit(dist.pred$fit + 1.96*dist.pred$se.fit), x = fig1$dist.s, var = "Distance")
+
+pdata <- rbind(pov.s, pd.s, dist.s)
+pdata$actual <- as.numeric(c(fig1$cvr, fig1$cvr, fig1$cvr))
+pdata$var <- factor(pdata$var, levels = c('Poverty', 'Distance', 'Sparseness'))
+
+# Plot results
+p0 <- ggplot(data = pdata)
+p1 <- geom_line(aes(x = x, y = pred))
+p2 <- geom_ribbon(aes(x = x, ymin = min, ymax = max), alpha = 0.25)
+p3 <- geom_point(aes(y = actual, x = x), alpha = 0.01, size = 0.75)
+
+out <- p0 + p1 + p2 + p3 + 
+  theme_bw() + 
+  facet_wrap(~var, scales = 'free_x', nrow = 1) + 
+  ylab('Prob. of Any Voter Registration') + 
+  xlab('Standardized Predictor') +
+  scale_y_continuous(breaks = c(0, 0.5, 1), labels = c('0', '0.5', '1'), expand = c(0.1, 0)) + theme(axis.title = element_text(size = 12), axis.text.x = element_blank(), axis.ticks.x = element_blank(), strip.text.x = element_text(size = 12))
+
+ggsave(out, filename = "output/fg1.tiff", width = 8, height = 3, dpi = 1200)
+
+out
+
+```
+
+
+# Table 2: Impact of Interventions on Voter Registration
+
+This table presents the proximate impact of the interventions, exploring only the intervention period.
+
+```{r}
+
+# Run the regressions. This can take time given the fixed effects.
+
+# 1: basic
+reg1 <- lm(reg ~ as.factor(treatment_2d_10d),data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",])
+#summary(reg1)
+rse.reg1 <- lm_cluster_robust2(reg1, data = datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], cluster_name = "PS_ID")[[1]][,2]
+#rse.reg1
+
+# 2: pre-registered
+reg2 <- lm(reg ~  as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day),data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",])
+#summary(reg2)
+rse.reg2 <- lm_cluster_robust2(reg2, data = datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], cluster_name = "PS_ID")[[1]][,2]
+#rse.reg2
+
+# 3: 2 + weights + covars
+reg3 <- lm(reg ~ as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day) + pov + distance + pd ,data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], weights=w)
+#summary(reg3)
+rse.reg3 <- lm_cluster_robust2(reg3, data = datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",], cluster_name = "PS_ID")[[1]][,2]
+#rse.reg3
+
+# 4: 3 but dependent variable divided by 2013 registered voters
+dl2 <- datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",]
+dl2 <- dl2[which(!is.na(dl2$reg_byrv13)),]
+reg4 <- lm(reg_byrv13 ~ as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day) + pov + distance + pd ,data = dl2, weights=w)
+#summary(reg4)
+rse.reg4 <- lm_cluster_robust2(reg4, data = dl2, cluster_name = "PS_ID")[[1]][,2]
+#rse.reg4
+
+# 5: 4 but collapsed to polling station level
+datashort$treatment_2d_10d <-datashort$treat #necessary to get output on same rows
+reg5 <- lm(reg_int_byrv13 ~  as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + pov + distance + pd,data =datashort, weights=w)
+se.reg5 <- coef(summary(reg5))[,"Std. Error"]
+#summary(reg5)
+
+```
+
+
+```{r}
+
+# Dependent variable information for control areas 
+
+# Average number of registrations per PS per day
+c1<-round(mean(datalong$reg[datalong$treatment_2d_10d=="Control" & (datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06")], na.rm=TRUE),4)
+
+# Average number of registrations per PS per day divided by total 2013 registered at that PS
+c4<-round(mean(datalong$reg[datalong$treatment_2d_10d=="Control" & (datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06")]/datalong$rv13[datalong$treatment_2d_10d=="Control" & (datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06")], na.rm=TRUE),4)
+
+# Total number of registration at a PS over the intervention period divided by total 2013 registered at that PS
+c5<-round(mean(datashort$reg_int_byrv13[datashort$treatment_2d_10d=="Control"], na.rm=TRUE),4)
+
+```
+
+
+```{r, include=FALSE}
+
+# Create the .tex table, which is loaded by the Rmd manuscript
+
+out <- stargazer(reg1, reg2, reg3, reg4, reg5, 
+                 title = c('Impact of Interventions on Voter Registration'),
+                 label = 'tab:regshortrun',
+                 font.size = 'footnotesize',
+                 no.space = TRUE,
+                 #column.separate = c(2, 2),
+                column.labels = c('\\# Regs', '\\# Regs', '\\# Regs', '\\# Regs by 2013', '\\# Regs by 2013'), 
+                dep.var.labels.include = FALSE,
+                 dep.var.caption = "",
+                 star.char = NULL,
+                 se = list(rse.reg1, rse.reg2, rse.reg3, rse.reg4, se.reg5),
+                 #dep.var.caption = 'Dependent Variable',
+                 covariate.labels = c('Canvassing effect', 'SMS effect', 'Localization effect', 'Localization+Canvassing effect', 'Localization+SMS effect'),
+                 add.lines = list(c('Control average', c1, c1, c1, c4, c5),
+                                  c('Level of analysis', 'PS day', 'PS day', 'PS day', 'PS day', 'PS'), 
+                 c('Pre-registered', 'No', 'Yes', 'No', 'No', 'No'),
+                 c('Block FE', 'No', 'Yes', 'Yes', 'Yes', 'Yes'), 
+                 c('Polling Station FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                 c('Day FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                 c('Controls', 'No', "No", 'Yes', 'Yes', 'Yes'), 
+                 c('Weights', 'No', "No", 'Yes', 'Yes', 'Yes')), 
+                 omit = c('Constant', '_ID', 'day', 'pov', 'distance', 'pd'),
+                 omit.stat = c('f', 'adj.rsq', 'ser'),
+                 notes = "\\parbox[t]{40cm}{To be overwritten.}",
+                 notes.append=FALSE, 
+                 notes.align="l"
+)
+
+# This will align it all the way to the left
+note.latex <- "\\multicolumn{6}{l}{\\parbox[t]{15.5cm}{Note: $^{*}$p$<$0.1; $^{**}$p$<$0.05; $^{***}$p$<$0.01. Clustered, robust standard errors in parentheses (columns 1 to 4). Unit of analysis for columns 1 to 3 is the polling-station day and the outcome is the absolute number of registered voters. Columns 4 and 5 divide the outcome by the number of registered voters in 2013, measured at the polling station-day level and polling station-level, respectively. For Localization, Localization+Canvassing and Localization+SMS, treatment are the two days at which the intervention took place. For Canvassing-only and SMS-only, treatment are those two days at which the intervention took place plus the ten following days. The remaining days plus polling station days assigned to the control areas, are status quo. The full experimental sample involved 1,674 polling stations, based on data provided by IEBC in 2016. However, six polling stations were dropped due to operational reasons (e.g., stations were retired from service for the 2017 elections or had zero registered voters in 2013). This leaves us with 66,720 (1,668) observations in column 4 (5).}}\\\\"
+out[grepl("Note",out)] <- note.latex
+
+cat(out, file = 'output/tb2.tex', sep = "\n")
+
+```
+
+
+
+
+```{r, warning=FALSE, results='asis'}
+
+# output using stargazer html
+
+stargazer(reg1, reg2, reg3, reg4, reg5, type = "html", 
+                title = c('Impact of Interventions on Voter Registration'),
+                font.size = 'footnotesize',
+                no.space = TRUE,
+                column.labels = c('\\# Regs', '\\# Regs', '\\# Regs', '\\# Regs by 2013', '\\# Regs by 2013'), 
+                dep.var.labels.include = FALSE,
+                dep.var.caption = "",
+                star.char = NULL,
+                se = list(rse.reg1, rse.reg2, rse.reg3, rse.reg4, se.reg5),
+                covariate.labels = c('Canvassing effect', 'SMS effect', 'Localization effect', 'Localization+Canvassing effect', 'Localization+SMS effect'),
+                add.lines = list(c('Control average', c1, c1, c1, c4, c5),
+                c('Level of analysis', 'PS day', 'PS day', 'PS day', 'PS day', 'PS'), 
+                c('Pre-registered', 'No', 'Yes', 'No', 'No', 'No'),
+                c('Block FE', 'No', 'Yes', 'Yes', 'Yes', 'Yes'), 
+                c('Polling Station FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                c('Day FE', 'No', 'Yes', 'Yes', 'Yes', 'No'), 
+                c('Controls', 'No', "No", 'Yes', 'Yes', 'Yes'), 
+                c('Weights', 'No', "No", 'Yes', 'Yes', 'Yes')), 
+                omit = c('Constant', '_ID', 'day', 'pov', 'distance', 'pd'),
+                omit.stat = c('f', 'adj.rsq', 'ser')
+)
+
+```
+
+# Figure 2: Results by Poverty, Distance and Population Density
+
+This figure presents the results by quintiles of the following three subgroups: poverty, distance from registration office, and population density.
+
+```{r, warning=FALSE}
+
+# Prepare quintiles for each subgroup
+
+ublock <- unique(datashort$BLOCK_ID)
+block.vars <- foreach(ii = 1:length(ublock), .combine = rbind) %dopar% {
+  tmp <- datashort[which(datashort$BLOCK_ID == ublock[ii]),]
+  mdist <- mean(tmp$distance)
+  mpov <- mean(tmp$pov)
+  mdens <- mean(tmp$pd)
+  return(data.frame(BLOCK_ID = ublock[ii], distance = mdist, pov = mpov, dens=mdens))
+}
+
+# 5= poor, 1= rich
+block.q.pov <- quantile(block.vars$pov, seq(0, 1, 0.2))
+block.vars$pov.q <- findInterval(x = block.vars$pov, vec = block.q.pov, all.inside = T, rightmost.closed = T)
+
+# 5= far away, 1= closeby
+block.q.dist <- quantile(block.vars$distance, seq(0, 1, 0.2))
+block.vars$dist.q <- findInterval(x = block.vars$distance, vec = block.q.dist, all.inside = T, rightmost.closed = T)
+
+# 5= low density, 1= high density
+block.q.dens <- quantile(block.vars$dens, seq(0, 1, 0.2))
+block.vars$dens.q <- findInterval(x = block.vars$dens, vec = block.q.dens, all.inside = T, rightmost.closed = T)
+
+# assign quantiles to blocks
+datashort$pov.q <- NA
+datashort$dist.q <- NA
+datashort$dens.q <- NA
+for(ii in 1:5){
+  datashort$pov.q[which(datashort$BLOCK_ID %in% block.vars$BLOCK_ID[block.vars$pov.q == ii])] <- ii
+  datashort$dist.q[which(datashort$BLOCK_ID %in% block.vars$BLOCK_ID[block.vars$dist.q == ii])] <- ii
+  datashort$dens.q[which(datashort$BLOCK_ID %in% block.vars$BLOCK_ID[block.vars$dens.q == ii])] <- ii
+}
+
+## Run regressions
+
+# Poverty
+# 1 is richests and 5 is high poverty.
+pov.quant <- foreach(ii = 1:5) %dopar% {
+  out <- summary(lm(reg_int_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + pov + distance + pd, data = datashort[datashort$pov.q == ii,], weights=w))
+  return(out)
+}
+
+# Distance
+# 1 is nearby and 5 is far away
+dist.quant <- foreach(ii = 1:5) %dopar% {
+  out <- summary(lm(reg_int_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + pov + distance + pd, data = datashort[datashort$dist.q == ii,]), weights=w)
+  return(out)
+}
+
+# Density
+# 1 is dense and 5 is not dense
+dens.quant <- foreach(ii = 1:5) %dopar% {
+  out <- summary(lm(reg_int_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + pov + distance + pd, data = datashort[datashort$dens.q == ii,]), weights=w)
+  return(out)
+}
+
+```
+
+
+```{r}
+
+# Create figure
+
+## Poverty
+
+df.pov <- foreach(ii = 1:length(pov.quant), .combine = rbind) %dopar% {
+  tmp <- pov.quant[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  tmp$min <- tmp$coef - 1.96*tmp$se
+  tmp$max <- tmp$coef + 1.96*tmp$se
+  tmp$q <- ii
+  tmp$context <- "Pov"
+  tmp$Treatment <- c("C","S","L","L+C","L+S")
+  tmp$Treatment <- factor(tmp$Treatment, levels = c("C","S","L","L+C","L+S"))
+  tmp
+}
+df.pov <- transform(df.pov, q = c("Richest", "Rich", "Median","Poor","Poorest")[as.numeric(q)])
+df.pov$q <- factor(df.pov$q, levels = c("Richest", "Rich", "Median","Poor","Poorest"))
+
+p <- ggplot(data = df.pov) + theme_bw() + 
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Treatment, ymin = min, ymax = max)) +
+  geom_point(aes(x=Treatment, y=coef)) +
+  ylim(-0.025, 0.075) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5), axis.title.x=element_blank(), axis.title.y=element_blank())
+pov <- p + facet_grid(. ~ q)  + theme(strip.text.x = element_text(size=12))
+
+## Distance
+
+df.dist <- foreach(ii = 1:length(dist.quant), .combine = rbind) %dopar% {
+  tmp <- dist.quant[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  tmp$min <- tmp$coef - 1.96*tmp$se
+  tmp$max <- tmp$coef + 1.96*tmp$se
+  tmp$q <- ii
+  tmp$context <- "Dens"
+  tmp$Treatment <- c("C","S","L","L+C","L+S")
+  tmp$Treatment <- factor(tmp$Treatment, levels = c("C","S","L","L+C","L+S"))
+  tmp
+}
+df.dist <- transform(df.dist, q = c("Closest", "Close", "Median","Far","Farthest")[as.numeric(q)])
+df.dist$q <- factor(df.dist$q, levels = c("Closest", "Close", "Median","Far","Farthest"))
+
+p <- ggplot(data = df.dist) + theme_bw() + 
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Treatment, ymin = min, ymax = max)) +
+  geom_point(aes(x=Treatment, y=coef)) +
+  ylim(-0.025, 0.075) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5), axis.title.x=element_blank(), axis.title.y=element_blank())
+dis <- p + facet_grid(. ~ q)  + theme(strip.text.x = element_text(size=12))
+
+## Density
+
+df.dens <- foreach(ii = 1:length(dens.quant), .combine = rbind) %dopar% {
+  tmp <- dens.quant[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  tmp$min <- tmp$coef - 1.96*tmp$se
+  tmp$max <- tmp$coef + 1.96*tmp$se
+  tmp$q <- 6-ii
+  tmp$context <- "Dens"
+  tmp$Treatment <- c("C","S","L","L+C","L+S")
+  tmp$Treatment <- factor(tmp$Treatment, levels = c("C","S","L","L+C","L+S"))
+  tmp
+}
+df.dens <- transform(df.dens, q = c("Densest", "Dense", "Median","Sparse","Sparsest")[as.numeric(q)])
+df.dens$q <- factor(df.dens$q, levels = c("Densest", "Dense", "Median","Sparse","Sparsest"))
+
+p <- ggplot(data = df.dens) + theme_bw() +
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Treatment, ymin = min, ymax = max)) +
+  geom_point(aes(x=Treatment, y=coef)) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5), axis.title.x=element_blank(), axis.title.y=element_blank())
+
+den <- p + facet_grid(. ~ q) + theme(strip.text.x = element_text(size=12))
+
+# Combine the three figures and output
+
+fout <- grid.arrange(pov, dis, den, nrow=3)
+
+  ggsave(fout, filename = 'output/fg2.tiff', dpi = 1200, width = 8, height = 10)
+
+```
+
+## Related numbers used in text
+
+The magnitudes of the effects of localization in richest, poorest, closest, farthest, densest and sparsest quintile of blocks:
+
+```{r}
+pov_1 <-as.data.frame(pov.quant[[1]]$coefficients[4,])
+pov_5 <-as.data.frame(pov.quant[[5]]$coefficients[4,])
+dis_1 <-as.data.frame(dist.quant[[1]]$coefficients[4,])
+dis_5 <-as.data.frame(dist.quant[[5]]$coefficients[4,])
+den_5 <-as.data.frame(dens.quant[[1]]$coefficients[4,])
+den_1 <-as.data.frame(dens.quant[[5]]$coefficients[4,])
+
+impact <- cbind(pov_1, pov_5, dis_1, dis_5, den_1, den_5)
+
+colnames(impact) =  c("Richest", "Poorest", "Closest", "Farthest","Densest", "Sparsest")
+kable(impact, digits = 4)
+```
+
+
+# Figure 3: Downstream Effects of Localization on Voter Registration and Election Outcomes
+
+Next, we estimate the effects of the localization intervention on registered voters, turnout, turnout rate, vote margin and preference diversity, for six different races during the 2017 Kenya Presidential Election.
+
+```{r}
+
+tc.func <- function(x){tryCatch(x, error = function(e){NA})}
+vars <- c('to', "pct.to","frac2","vm", 'rv')
+dats <- c('wrep', 'caw', 'gov', 'sen', 'mp', 'pres')
+combs <- expand.grid(vars, dats, stringsAsFactors = F)
+combs$var.name <- paste(combs[,1], combs[,2], sep = '.')
+
+all.res <- foreach(ii = 1:nrow(combs), .combine = rbind) %dopar% {
+outcome.name <- combs[ii, 'var.name']
+datashort$outcome <- datashort[, outcome.name]
+datashort$outcome.std <- std.func(datashort$outcome)
+
+out.std <- tryCatch(lm_robust(outcome.std ~ as.factor(BLOCK_ID) + pd + distance + pov + local, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID), error = function(e){NA})
+
+out <- data.frame(
+  coef =  tc.func(coef(out.std)['local']),
+  se = tc.func(out.std$std.error['local'])
+)
+out$t <- round(out$coef/out$se, 2)
+out$coef <- round(out$coef, 3)
+out$se <- round(out$se, 3)
+out$var <- combs[ii, 'Var1']
+out$contest <- combs[ii, 'Var2']
+return(out)
+}
+
+pdata <- all.res
+pdata$var[which(pdata$var == 'to')] <- 'Turnout'
+pdata$var[which(pdata$var == 'pct.to')] <- 'Turnout\n Rate'
+pdata$var[which(pdata$var == 'frac2')] <- 'Preference\n Diversity'
+pdata$var[which(pdata$var == 'vm')] <- 'Vote\n Margin'
+pdata$var[which(pdata$var == 'rv')] <- 'Registered\n Voters'
+pdata$contest[which(pdata$contest == 'caw')] <- 'Ward Member'
+pdata$contest[which(pdata$contest == 'gov')] <- 'Governor'
+pdata$contest[which(pdata$contest == 'mp')] <- 'MP'
+pdata$contest[which(pdata$contest == 'pres')] <- 'President'
+pdata$contest[which(pdata$contest == 'sen')] <- 'Senator'
+pdata$contest[which(pdata$contest == 'wrep')] <- 'Women\'s Rep.'
+pdata$contest <- factor(pdata$contest, levels = c('President', 'Governor', 'MP', 'Senator', 'Ward Member', 'Women\'s Rep.'))
+pdata$Outcome <- pdata$var
+pdata$Outcome <- factor(pdata$Outcome, levels = c('Registered\n Voters', 'Turnout','Turnout\n Rate', 'Vote\n Margin', 'Preference\n Diversity'))
+pdata$min <- pdata$coef - 1.96*pdata$se
+pdata$max <- pdata$coef + 1.96*pdata$se
+p <- ggplot(data = pdata) + theme_bw() +
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_linerange(aes(x = Outcome, ymin = min, ymax = max)) +
+  geom_point(aes(x=Outcome, y=coef)) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5, size = 10), axis.title=element_text(size = 12), strip.text.x = element_text(size = 12)) + 
+  ylab('Standard Deviations') + xlab('Election Outcomes') +
+  facet_wrap(~ contest)
+
+# Output figure
+
+ggsave(p, filename = 'output/fg3.tiff', width = 8, height = 6, dpi = 1200)
+
+p
+
+```
+
+## Related numbers used in text
+
+This table present the effect sizes in tabular form across races and outcomes, in standardized coefficients.
+
+```{r}
+
+# In standard deviations
+
+downstream <- all.res
+downstream$var[which(downstream$var == 'to')] <- 'Turnout'
+downstream$var[which(downstream$var == 'pct.to')] <- 'Turnout Rate'
+downstream$var[which(downstream$var == 'frac2')] <- 'Preference Diversity'
+downstream$var[which(downstream$var == 'vm')] <- 'Vote Margin'
+downstream$var[which(downstream$var == 'rv')] <- 'Registered Voters'
+downstream$contest[which(downstream$contest == 'caw')] <- 'Ward Member'
+downstream$contest[which(downstream$contest == 'gov')] <- 'Governor'
+downstream$contest[which(downstream$contest == 'mp')] <- 'MP'
+downstream$contest[which(downstream$contest == 'pres')] <- 'President'
+downstream$contest[which(downstream$contest == 'sen')] <- 'Senator'
+downstream$contest[which(downstream$contest == 'wrep')] <- 'Women\'s Rep.'
+
+downstream <- downstream[, c(5, 4, 1, 2, 3)]
+rownames(downstream) <- c()
+colnames(downstream) =  c("Race", "Outcome", "effect", "se","t-value")
+kable(downstream)
+
+```
+
+We also present the results, not standardized:
+
+```{r}
+
+all.res.NS <- foreach(ii = 1:nrow(combs), .combine = rbind) %dopar% {
+outcome.name <- combs[ii, 'var.name']
+datashort$outcome <- datashort[, outcome.name]
+
+out.NS <- tryCatch(lm_robust(outcome ~ as.factor(BLOCK_ID) + pd + distance + pov + local, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID), error = function(e){NA})
+
+out <- data.frame(
+  coef =  tc.func(coef(out.NS)['local']),
+  se = tc.func(out.NS$std.error['local'])
+)
+out$t <- round(out$coef/out$se, 2)
+out$coef <- round(out$coef, 3)
+out$se <- round(out$se, 3)
+out$var <- combs[ii, 'Var1']
+out$contest <- combs[ii, 'Var2']
+return(out)
+}
+
+# Create table
+
+downstream <- all.res.NS
+downstream$var[which(downstream$var == 'to')] <- 'Turnout'
+downstream$var[which(downstream$var == 'pct.to')] <- 'Turnout Rate'
+downstream$var[which(downstream$var == 'frac2')] <- 'Preference Diversity'
+downstream$var[which(downstream$var == 'vm')] <- 'Vote Margin'
+downstream$var[which(downstream$var == 'rv')] <- 'Registered Voters'
+downstream$contest[which(downstream$contest == 'caw')] <- 'Ward Member'
+downstream$contest[which(downstream$contest == 'gov')] <- 'Governor'
+downstream$contest[which(downstream$contest == 'mp')] <- 'MP'
+downstream$contest[which(downstream$contest == 'pres')] <- 'President'
+downstream$contest[which(downstream$contest == 'sen')] <- 'Senator'
+downstream$contest[which(downstream$contest == 'wrep')] <- 'Women\'s Rep.'
+
+downstream <- downstream[, c(5, 4, 1, 2, 3)]
+rownames(downstream) <- c()
+colnames(downstream) =  c("Race", "Outcome", "effect", "se","t-value")
+kable(downstream)
+
+
+
+```
+
+
+We also present the results for 2017 registrations as a percent of 2013 registrations, which are discussed in the text.
+
+```{r}
+datashort$tmp <- std.func(datashort$rv.pres/datashort$rv13)
+lm.out <- lm_robust(tmp ~ local + as.factor(BLOCK_ID) + pd + distance + pov, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID)
+
+out1 <- data.frame(
+  coef =  tc.func(coef(lm.out)['local']),
+  se = tc.func(lm.out$std.error['local'])
+)
+out1$t <- round(out1$coef/out1$se, 2)
+out1$coef <- round(out1$coef, 3)
+out1$se <- round(out1$se, 3)
+out1$var <- '2017 RV as % of 2013 RV, Standardized'
+
+datashort$tmp <- datashort$rv.pres/datashort$rv13
+lm.out <- lm_robust(tmp ~ local + as.factor(BLOCK_ID) + pd + distance + pov, data = datashort, weights = datashort$w, clusters = datashort$BLOCK_ID)
+
+out2 <- data.frame(
+  coef =  tc.func(coef(lm.out)['local']),
+  se = tc.func(lm.out$std.error['local'])
+)
+out2$t <- round(out2$coef/out2$se, 2)
+out2$coef <- round(out2$coef, 3)
+out2$se <- round(out2$se, 3)
+out2$var <- '2017 RV as % of 2013 RV'
+out <- rbind(out1, out2)
+
+rownames(out) <- c()
+colnames(out) =  c("effect", "se","t-value", "Outcome")
+kable(out)
+
+```
+
+# Figure A1: Ex Post Power Calculations
+
+This figure presents the results of an ex post power calculation. The results show that we are well-powered to observe even relatively small effects.
+
+```{r, warning=FALSE}
+
+ds <- datashort
+ds$pct.rv <- ds$reg_int_byrv13
+utr <- as.character(unique(ds$treat))
+
+# Calculate mean and sd of each treatment cell 
+out <- foreach(ii = 1:length(utr), .combine = rbind) %dopar% {
+  tmp.m <- mean(ds$pct.rv[which(ds$treat == utr[ii])], na.rm = T)
+  tmp.s <- sd(ds$pct.rv[which(ds$treat == utr[ii])], na.rm = T)
+  ret <- data.frame(
+    tr = utr[ii], mean = tmp.m, sd = tmp.s
+  )
+  return(ret)
+}
+
+# First loop: sample size
+samp.size <- seq(10, 575, by = 25)
+p.final <- foreach(ii = 1:length(samp.size), .combine = rbind) %do% { 
+tss <- samp.size[ii]
+out$n <- tss
+p.sim <- foreach(jj = 1:10000, .combine = rbind) %dopar% {
+  tdata <- data.frame(out = rep(NA, tss*6), tr = rep(out$tr, each = tss))
+  tdata$out[which(tdata$tr == 'Control')] <- sample(ds$pct.rv[which(ds$treat == 'Control')], size = tss, replace = T)
+  tdata$out[which(tdata$tr == 'Canvass')] <- sample(ds$pct.rv[which(ds$treat == 'Canvass')], size = tss, replace = T)
+  tdata$out[which(tdata$tr == 'SMS')] <- sample(ds$pct.rv[which(ds$treat == 'SMS')], size = tss, replace = T)
+  tdata$out[which(tdata$tr == 'Local')] <- sample(ds$pct.rv[which(ds$treat == 'Local')], size = tss, replace = T)
+  tdata$out[which(tdata$tr == 'Local+Canvass')] <- sample(ds$pct.rv[which(ds$treat == 'Local+Canvass')], size = tss, replace = T)
+  tdata$out[which(tdata$tr == 'Local+SMS')] <- sample(ds$pct.rv[which(ds$treat == 'Local+SMS')], size = tss, replace = T)
+  tdata$tr <- relevel(as.factor(tdata$tr), ref = 'Control')
+  tlm <- lm_robust(out~tr, data = tdata) 
+  p.out <- tlm$p.value[2:6]
+  return(p.out)
+}
+power.sim <- as.data.frame(t(apply(p.sim, 2, function(x){sum(x <= 0.05)/length(x)})))
+power.sim$samp.size <- tss
+return(power.sim)
+}
+
+# Put figure together
+pdata <- melt(p.final, id.vars = 'samp.size')
+names(pdata) <- c('samp.size', 'Treatment', 'Power')
+pdata$Treatment <- as.character(pdata$Treatment)
+pdata$Treatment[which(pdata$Treatment == 'trCanvass')] <- "Canvass"
+pdata$Treatment[which(pdata$Treatment == 'trSMS')] <- "SMS"
+pdata$Treatment[which(pdata$Treatment == 'trLocal')] <- "Local"
+pdata$Treatment[which(pdata$Treatment == 'trLocal+Canvass')] <- "Local+Canvass"
+pdata$Treatment[which(pdata$Treatment == 'trLocal+SMS')] <- "Local+SMS"
+pdata$Treatment <- factor(pdata$Treatment, levels = c('Canvass', 'SMS', 'Local', 'Local+Canvass', 'Local+SMS'))
+p0 <- ggplot(data = pdata)
+p1 <- geom_point(aes(x = samp.size, y = Power, shape = Treatment))
+p2 <- geom_line(aes(x = samp.size, y = Power, group = Treatment), size = 0.1)
+out <- p0 + p1 + p2 + xlab('Sample Size (per cell)') + theme_bw() +
+  geom_vline(xintercept = 279) + geom_hline(yintercept = 0.8)
+
+# Output figure
+
+  ggsave(out, filename = 'output/fig_a1_powercalc.pdf', width = 8, height = 3)
+
+out
+
+```
+
+
+# Table A6: Kolgorov-Smirnoff Balance Tests: Spatial Covariates
+
+This table shows that the treatments are well-balanced across spatial covariates.
+
+```{r}
+comps <- expand.grid(1:6, 1:6)
+comps <- comps[-which(comps[,1] == comps[,2]),]
+comps <- as.data.frame(comps)
+comps$comp <- apply(comps, 1, function(x){paste(sort(x), collapse = "")})
+comps <- comps[-which(duplicated(comps$comp)),]
+
+bal.stats <- foreach(ii = 1:nrow(comps), .combine = rbind) %dopar% {
+  pov <- ks.boot(Tr = datashort$pov[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$pov[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  pd <- ks.boot(Tr = datashort$pd[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$pd[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  pdist <- ks.boot(Tr = datashort$distance[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$distance[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  lights <- ks.boot(Tr = datashort$lights[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$lights[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  terrain <- ks.boot(Tr = datashort$terrain[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$terrain[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  slope <- ks.boot(Tr = datashort$slope[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$slope[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  elev <- ks.boot(Tr = datashort$elev[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$elev[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  health <- ks.boot(Tr = datashort$health[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$health[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  deprat <- ks.boot(Tr = datashort$deprat[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$deprat[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  lit <- ks.boot(Tr = datashort$lit[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$lit[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  mean.age <- ks.boot(Tr = datashort$mean.age[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$mean.age[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  sd.age <- ks.boot(Tr = datashort$sd.age[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$sd.age[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  mean.youth <- ks.boot(Tr = datashort$mean.youth[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$mean.youth[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  mean.f <- ks.boot(Tr = datashort$mean.f[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$mean.f[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  votes.cast <- ks.boot(Tr = datashort$votes.cast[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$votes.cast[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  kenyatta <- ks.boot(Tr = datashort$kenyatta2013.vs[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$kenyatta2013.vs[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  odinga <- ks.boot(Tr = datashort$odinga2013.vs[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$odinga2013.vs[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  to <- ks.boot(Tr = datashort$to2013[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$to2013[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  rv <- ks.boot(Tr = datashort$rv2013[which(datashort$tr == comps[ii, 'Var1'])], Co = datashort$rv2013[which(datashort$tr == comps[ii, 'Var2'])], nboots = 25000)$ks.boot.pvalue
+  
+  ret <- data.frame(gr1 = comps[ii, 'Var1'], gr2 = comps[ii, 'Var2'], pov = pov, pd = pd, dist = pdist, lights = lights,
+                    terrain = terrain, slope = slope, elev = elev, health = health, deprat = deprat, lit = lit, mean.age = mean.age,
+                    sd.age = sd.age, mean.youth = mean.youth, mean.f = mean.f, votes.cast = votes.cast, kenyatta = kenyatta,
+                    odinga = odinga, to = to, rv = rv)
+  return(ret)
+}
+
+bal.stats$gr1 <- as.character(bal.stats$gr1)
+bal.stats$gr2 <- as.character(bal.stats$gr2)
+bal.stats$gr1[which(bal.stats$gr1 == '1')] <- 'Control'
+bal.stats$gr1[which(bal.stats$gr1 == '2')] <- 'Canvass'
+bal.stats$gr1[which(bal.stats$gr1 == '3')] <- 'SMS'
+bal.stats$gr1[which(bal.stats$gr1 == '4')] <- 'Local'
+bal.stats$gr1[which(bal.stats$gr1 == '5')] <- 'Loc.+Canv.'
+bal.stats$gr1[which(bal.stats$gr1 == '6')] <- 'Loc.+SMS'
+bal.stats$gr2[which(bal.stats$gr2 == '1')] <- 'Control'
+bal.stats$gr2[which(bal.stats$gr2 == '2')] <- 'Canvass'
+bal.stats$gr2[which(bal.stats$gr2 == '3')] <- 'SMS'
+bal.stats$gr2[which(bal.stats$gr2 == '4')] <- 'Local'
+bal.stats$gr2[which(bal.stats$gr2 == '5')] <- 'Loc.+Canv.'
+bal.stats$gr2[which(bal.stats$gr2 == '6')] <- 'Loc.+SMS'
+bs1 <- bal.stats[,c(1:12)]
+bs2 <- bal.stats[,c(1, 2, 13:21)]
+names(bs1) <- c('Group 1', 'Group 2', 'Poverty', 'Pop. Dens.', 'Distance', 'Lights', 'Terrain', 'Slope', 'Elev.', 'Health', 'Dep. Ratio', 'Literacy')
+names(bs2) <- c('Group 1', 'Group 2', 'Mean age', 'SD age', 'Pct. Youth', 'Pct. Female', 'Votes Cast', 'Kenyatta VS', 'Odinga VS', 'Turnout', 'Reg. Voters')
+
+```
+
+```{r, include=FALSE}
+
+# Output to .tex. No need to show in HTML
+
+
+print(xtable(bs1, digits = 2, caption = 'Kolgorov-Smirnoff Balance Tests: Spatial Covariates', label = "tab:balance1"), 
+      include.rownames = F, file = "output/tab_a7_balance1.tex", size = 'small', 
+      caption.placement = "top",
+      add.to.row = list(list(15), "\\hline \\multicolumn{12}{p{19cm}}{\\textit{Note:} Columns 1 and 2 state the intervention groups being compared. Remaining columns present bootstrapped KS statistic p-values, comparing the distributions of covariates across treatment arms.} \\\\"), hline.after = c(-1, 0))
+
+
+```
+
+```{r, results='asis'}
+print.xtable(xtable(bs1, digits = 2, caption = 'Kolgorov-Smirnoff Balance Tests: Spatial Covariates'), type = 'html')
+```
+
+# Table A7: Kolgorov-Smirnoff Balance Tests: 2013 Election-Related Covariates
+
+This table shows that the treatments are well-balanced across election-related covariates.
+
+```{r, include=FALSE}
+
+# Output to .tex. No need to show in HTML
+
+print(xtable(bs2, digits = 2, caption = 'Kolgorov-Smirnoff Balance Tests: 2013 Election-Related Covariates', label = "tab:balance2"), 
+      include.rownames = F, file = "output/tab_a7_balance2.tex", size = 'small', 
+      caption.placement = "top",
+      add.to.row = list(list(15), "\\hline \\multicolumn{11}{p{21cm}}{\\textit{Note:} Columns 1 and 2 state the intervention groups being compared. Remaining columns present bootstrapped KS statistic p-values, comparing the distributions of covariates across treatment arms.} \\\\"), hline.after = c(-1, 0))
+
+```
+
+```{r, results='asis'}
+
+print.xtable(xtable(bs2, digits = 2, caption = 'Kolgorov-Smirnoff Balance Tests: 2013 Election-Related Covariates'), type = 'html')
+
+```
+
+# Figure A2: Treatment Effects for Different Time Windows
+
+This figure presents results from re-estimating the main model using different treatment
+windows.
+
+```{r}
+
+
+# Lets do 20 intervals of 10 days. 0-200 = 21x
+results <- vector("list",21)  
+errors <- vector("list",21)  
+
+for (i in seq(0,210,10)){
+
+datalong$treat <- "Control"
+datalong$treat[datalong$DATE >= datalong$DATE_DAY1 & datalong$DATE < datalong$DATE_DAY1+2+`i` & datalong$INTERVENTION=="Control"] <- "Control"
+datalong$treat[datalong$DATE >= datalong$DATE_DAY1 & datalong$DATE < datalong$DATE_DAY1+2+`i` & datalong$INTERVENTION=="Canvass"] <- "Canvass"
+datalong$treat[datalong$DATE >= datalong$DATE_DAY1 & datalong$DATE < datalong$DATE_DAY1+2+`i` & datalong$INTERVENTION=="SMS"] <- "SMS"
+datalong$treat[datalong$DATE >= datalong$DATE_DAY1 & datalong$DATE < datalong$DATE_DAY1+2+`i` & datalong$INTERVENTION=="Local"] <- "Local"
+datalong$treat[datalong$DATE >= datalong$DATE_DAY1 & datalong$DATE < datalong$DATE_DAY1+2+`i` & datalong$INTERVENTION=="Local+Canvass"] <- "Local+Canvass"
+datalong$treat[datalong$DATE >= datalong$DATE_DAY1 & datalong$DATE < datalong$DATE_DAY1+2+`i` & datalong$INTERVENTION=="Local+SMS"] <- "Local+SMS"
+table(datalong$treat)
+
+# Order
+datalong$treat <- factor(datalong$treat, levels = c("Control","Canvass", "SMS","Local","Local+Canvass","Local+SMS"))
+
+# No polling station FE. It otherwise takes a long time to run 
+# Including them, however, would give similar results
+dl2 <- datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",]
+dl2 <- dl2[which(!is.na(dl2$reg_byrv13)),]
+reg2 <- lm(reg_byrv13 ~ as.factor(treat) + as.factor(BLOCK_ID) + as.factor(day) + pov + distance + pd ,data = dl2, weights=w)
+rse.reg2 <- lm_cluster_robust2(reg2, data = dl2, cluster_name = "PS_ID")[[1]][,2]
+
+results[[i/10+1]] <- summary(reg2)
+errors[[i/10+1]] <- rse.reg2
+
+}
+
+# Prepare graphing
+df.results <- foreach(ii = 1:length(results), .combine = rbind) %dopar% {
+  tmp <- results[[ii]]
+  tmp <- data.frame(coef = coef(tmp)[2:6,1], se = coef(tmp)[2:6,2])
+  temp.errors <- errors[[ii]]
+  tmp$rse <- temp.errors[2:6]
+  tmp$min <- tmp$coef - 1.96*tmp$rse
+  tmp$max <- tmp$coef + 1.96*tmp$rse
+  tmp$q <- ii
+  tmp$q2 <- ii * 10 - 8
+  tmp$effect <- tmp$coef* tmp$q2
+  tmp$q <- factor(tmp$q,
+                  levels = c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19, 20, 21, 22),
+                  labels = c("2", "12", "22","32", "42", "52","62", "72", "82","92", "102", "112","122", "132", "142","152", "162", "172","182", "192", "202", "212"))
+  tmp$Treatment <- c("Canvas","SMS","Local","Local+Canvas","Local+SMS")
+  tmp$Treatment <- factor(tmp$Treatment, levels = tmp$Treatment)
+  tmp
+}
+
+# By treatment
+p <- ggplot(data = df.results) + theme_bw() +
+  geom_hline(yintercept = 0, color="darkgray") +
+  geom_point(aes(x=q, y=coef)) +
+  geom_linerange(aes(x = q, ymin = min, ymax = max)) +
+  theme(axis.text.x=element_text(angle=90, vjust = 0.5, size = 10),
+        axis.text.y=element_text(size = 10),
+        axis.title.x = element_text(color = "black", size = 20, face = "bold"),
+        axis.title.y = element_text(color = "black", size = 20, face = "bold")) +
+  labs(x = "Number of Treatment Days", y = "Intervention Effect") +
+  scale_y_continuous(breaks=c(0, 0.005,0.01))
+
+  out <- p + facet_grid(Treatment ~ .)
+
+# Output figure
+
+  ggsave(out, filename = 'output/fig_a2_overtime.pdf', width = 12, height = 8, unit = "in")
+
+  out
+
+```
+
+# Table A8: Baseline Summary Information
+
+This table presents descriptive statistics for the main outcome variables and the three blocking variables, based on the month preceding the onset of the intervention.
+
+```{r}
+
+# Information for the month preceding the intervention
+
+## Polling station day level
+
+# Number of registrations per PSD
+s_regs <- datalong$reg[datalong$DATE>="2016-10-14" & datalong$DATE<"2016-11-14"]
+
+# Number of registrations per PSD / Registered voters in 2013
+s_regs13 <- datalong$reg[datalong$DATE>="2016-10-14" & datalong$DATE<"2016-11-14"]/datalong$rv13[datalong$DATE>="2016-10-14" & datalong$DATE<"2016-11-14"]
+
+## Polling station level
+
+# Registered voters in 2013
+# Number of registrations per PS in the month preceding the intervention 
+# collapse from PSD to PS
+agg<-aggregate(datalong$reg[datalong$DATE>="2016-10-14" & datalong$DATE<"2016-11-14"], by=list(Category=datalong$PS_ID[datalong$DATE>="2016-10-14" & datalong$DATE<"2016-11-14"]), FUN=sum)
+#length(agg$x)
+s_regsmonth <- agg$x
+#summary(s_regsmonth)
+
+# As a comparison, this is the same code for the intervention period (same as Table 2 column 5's "Control average"):
+
+# Number of registrations per PS / Registered voters in 2013
+agg$PS_ID <-agg$Category
+agg <- merge(agg, datashort[, c("rv13","PS_ID")], "PS_ID")
+s_regsmonth13<- agg$x/agg$rv13
+datashort$s_pd <- datashort$pd *10000
+  
+# Obtain summary information
+
+summ.list <- list(s_regs, s_regs13, s_regsmonth13, s_regsmonth, datashort$rv13, datashort$pov, datashort$distance, datashort$s_pd)
+mean <- lapply(summ.list,mean, na.rm=TRUE)
+sd <- lapply(summ.list,sd, na.rm=TRUE)
+min <- lapply(summ.list,min, na.rm=TRUE)
+max <- lapply(summ.list,max, na.rm=TRUE)
+n <- lapply(summ.list,length)
+
+mean <- lapply(mean,round,4)
+sd <- lapply(sd,round,4)
+min <- lapply(min,round,4)
+max <- lapply(max,round,4)
+n <- lapply(n,round,0)
+
+# Make table
+
+summ.table <- cbind(mean,sd,min,max,n)
+colnames(summ.table) =  c("Mean", "SD", "Min", "Max", "Obs.")
+rownames(summ.table) =  c("# Registrations per PS day ", "# Registrations per PS day / 2013 reg. voters", "# Registrations per PS / 2013 reg. voters", "# Registrations per PS", "# Registered voters in 2013", "Poverty","Distance","Density (x10,000)")
+
+kable(summ.table, digits = 4)
+
+```
+
+```{r, include=FALSE}
+
+# Output table to .tex. No need to include this in the HTML
+
+print(xtable(summ.table, 
+             digits = c(0,4,4,4,4,0), 
+             caption = 'Baseline Information', 
+             label = "tab:baseline"), 
+      include.rownames = TRUE, 
+      file = "output/tab_a8_baseline.tex", 
+      size = 'small', 
+      caption.placement = "top",
+      add.to.row = list(list(8), "\\hline \\multicolumn{6}{p{16cm}}{\\textit{Note:} PS = polling station. Polling station day information is based on the month preceding the start of the intervention (November 14, 2016). Poverty, Distance and Density are defined as before.} \\\\"), 
+      hline.after = c(-1, 0))
+  
+```
+
+# Table A9: Comparison Intervention Effects
+
+This table compares the effects of the different interventions, presenting p-values from Wald tests.
+
+```{r}
+
+# Get robust standard errors
+reg2 <- lm(reg ~  as.factor(treatment_2d_10d) + as.factor(BLOCK_ID) + as.factor(PS_ID) + as.factor(day),data =datalong[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06",])
+reg2.rob <- cluster_robust(reg2, cluster = datalong$PS_ID[datalong$DATE>="2016-11-14" & datalong$DATE<="2017-01-06"])
+
+# Dyad the interventions
+aa <- names(coef(reg2))[2:6]
+comps <- expand.grid(aa, aa)
+comps <- comps[which(comps[,1] != comps[,2]),]
+uid <- apply(comps, 1, function(x){paste(sort(unlist(x)), collapse = "--")})
+comps <- comps[which(duplicated(uid)),]
+
+# Conduct Wald tests
+lh.out <- foreach(ii = 1:nrow(comps), .combine = rbind) %dopar% {
+  tmparg <- paste(comps[ii,2], comps[ii,1], sep = " = ")
+  tlh <- linearHypothesis(reg2,vcov=reg2.rob[[3]], tmparg, singular.ok=TRUE)["Pr(>F)"]
+  tlh <- tlh[2,1]
+  g1 <- gsub(as.character(comps[ii,2]), pattern = 'as.factor(treatment_2d_10d)', replacement = "", fixed = T)
+  g2 <- gsub(as.character(comps[ii,1]), pattern = 'as.factor(treatment_2d_10d)', replacement = "", fixed = T)
+  out <- data.frame(Tr1 = g1, Tr2 = g2, p = round(tlh, 2))              
+  return(out)
+}
+
+# Output table:
+
+lh.out$Tr1 <- as.character(lh.out$Tr1)
+lh.out$Tr1 <- replace(lh.out$Tr1, lh.out$Tr1=="Local", "Localization")
+lh.out$Tr1 <- replace(lh.out$Tr1, lh.out$Tr1=="Local+Canvass", "Localization+Canvassing")
+lh.out$Tr1 <- replace(lh.out$Tr1, lh.out$Tr1=="Local+SMS", "Localization+SMS")
+lh.out$Tr1 <- replace(lh.out$Tr1, lh.out$Tr1=="Canvass", "Canvassing")
+
+lh.out$Tr2 <- as.character(lh.out$Tr2)
+lh.out$Tr2 <- replace(lh.out$Tr2, lh.out$Tr2=="Local", "Localization")
+lh.out$Tr2 <- replace(lh.out$Tr2, lh.out$Tr2=="Local+Canvass", "Localization+Canvassing")
+lh.out$Tr2 <- replace(lh.out$Tr2, lh.out$Tr2=="Local+SMS", "Localization+SMS")
+lh.out$Tr2 <- replace(lh.out$Tr2, lh.out$Tr2=="Canvass", "Canvassing")
+
+colnames(lh.out) =  c("Intervention 1", "Intervention 2", "P-value")
+kable(lh.out, digits = 2)
+
+```
+
+
+# Figure A3: Comparison National and Sample Distributions
+
+This figure shows the joint distribution of poverty (horizontal axis) and logged population density (vertical axis) for the selected polling stations (white circles) and the full population of polling stations nationally (gray circles).
+
+```{r}
+
+joint_dens <- 
+  ggplot(exval) + geom_point(aes(pov, log_pd), colour = 'black', shape = 21, alpha = 0.5, fill = 'black') + theme_bw() +
+  scale_colour_manual(name = 'Polling Station', values = c("black", "white"), labels = c('Out of Sample', 'In Sample'), breaks = c('Selected', 'Not selected')) +
+  geom_point(data = exval[exval$selected == "Selected",], aes(pov, log_pd), colour = 'black', alpha = 1, shape = 21, fill = 'white') +
+  labs(x = "Poverty", y = "Logged Population Density", color = "Polling Station")
+
+# Output figure
+
+ggsave(plot = joint_dens, filename = "output/fig_a3_General.jpeg", width = 5, height = 5.7, unit = "in", dpi = 600)
+
+joint_dens
+
+```
+
+This concludes the replication file.
